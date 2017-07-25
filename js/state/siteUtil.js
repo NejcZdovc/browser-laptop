@@ -23,6 +23,14 @@ const isBookmarkFolder = (tags) => {
     (tags && typeof tags !== 'string' && tags.includes(siteTags.BOOKMARK_FOLDER))
 }
 
+const SITE_STATE_KEYS = [
+  'bookmarks',
+  'bookmarkFolders',
+  'historySites',
+  'pinnedSites'
+]
+module.exports.SITE_STATE_KEYS = SITE_STATE_KEYS
+
 /**
  * Sort comparator for sort function
  */
