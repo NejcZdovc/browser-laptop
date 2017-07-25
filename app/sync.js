@@ -20,6 +20,7 @@ const syncConstants = require('../js/constants/syncConstants')
 const appDispatcher = require('../js/dispatcher/appDispatcher')
 const AppStore = require('../js/stores/appStore')
 const syncUtil = require('../js/state/syncUtil')
+const {SITE_STATE_KEYS} = require('../js/state/siteUtil')
 const syncPendState = require('./common/state/syncPendState')
 const getSetting = require('../js/settings').getSetting
 const settings = require('../js/constants/settings')
@@ -68,13 +69,13 @@ const appStoreChangeCallback = function (diffs) {
     }
     const path = diff.path.split('/')
     if (path.length < 3) {
-      // We are looking for paths like ['', 'sites', 'https://brave.com/', 'title']
+      // We are looking for paths like ['', 'bookmarks', 'https://brave.com/', 'title']
       return
     }
 
     const type = path[1]
     const field = path[3]
-    const isSite = type === 'sites'
+    const isSite = SITE_STATE_KEYS.includes(type)
 
     const fieldsToPick = SYNC_FIELDS[type]
     if (!fieldsToPick) {
@@ -120,7 +121,7 @@ const appStoreChangeCallback = function (diffs) {
         entryJS.objectId = entryJS.objectId || syncUtil.newObjectId(statePath)
 
         sendSyncRecords(backgroundSender, action,
-          [type === 'sites' ? syncUtil.createSiteData(entryJS) : syncUtil.createSiteSettingsData(statePath[1], entryJS)])
+          [isSite ? syncUtil.createSiteData(entryJS) : syncUtil.createSiteSettingsData(statePath[1], entryJS)])
       }
     }
   })
@@ -284,6 +285,8 @@ module.exports.onSyncReady = (isFirstRun, e) => {
       return false
     }
 
+    // If this this exists, then we must have synced it; see below:
+    //   folderToObjectId[folderId] = record.objectId
     return !folderToObjectId[bookmark.get('folderId')]
   }
 
@@ -318,8 +321,12 @@ module.exports.onSyncReady = (isFirstRun, e) => {
 
     syncBookmark(bookmark)
   })
-
-  // TODO add bookamrkFolder sync as well
+  bookmarkFolders.forEach((bookmarkFolder) => {
+    if (shouldSyncBookmark(bookmarkFolder) !== true) {
+      return
+    }
+    syncBookmark(bookmarkFolder)
+  })
 
   sendSyncRecords(e.sender, writeActions.CREATE, bookmarksToSync)
 

@@ -11,6 +11,8 @@ const siteTags = require('../constants/siteTags')
 const siteUtil = require('./siteUtil')
 const {getSetting} = require('../settings')
 const {isDataUrl} = require('../lib/urlutil')
+const bookmarkUtil = require('../../app/common/lib/bookmarkUtil')
+const bookmarkFoldersUtil = require('../../app/common/lib/bookmarkFoldersUtil')
 const settings = require('../constants/settings')
 
 const CATEGORY_MAP = {
@@ -62,6 +64,10 @@ const SITE_FIELDS = [
   'folderId',
   'parentFolderId'
 ]
+
+// The Sync cache maps {sync objectId} -> {app state object path}
+// See createObjectCache() and updateObjectCache().
+const CACHED_STATE_COLLECTIONS = siteUtil.SITE_STATE_KEYS
 
 const pickFields = (object, fields) => {
   return fields.reduce((a, x) => {
@@ -321,15 +327,16 @@ module.exports.getExistingObject = (categoryName, syncRecord) => {
  * @param {Immutable.Map} appState application state
  * @returns {Immutable.Map} new app state
  */
-module.exports.createSiteCache = (appState) => {
+module.exports.createObjectCache = (appState) => {
   const objectsById = new Immutable.Map().withMutations(objectsById => {
-    // TODO what to do here?
-    appState.get('sites').forEach((site, siteKey) => {
-      const objectId = site.get('objectId')
-      if (!objectId) { return true }
-      const cacheKey = objectId.toJS().join('|')
-      objectsById = objectsById.set(cacheKey, ['sites', siteKey])
-    })
+    for (let collectionKey of CACHED_STATE_COLLECTIONS) {
+      appState.get(collectionKey).forEach((object, objectKey) => {
+        const objectId = object.get('objectId')
+        if (!objectId) { return true }
+        const cacheKey = objectId.toJS().join('|')
+        objectsById = objectsById.set(cacheKey, [collectionKey, objectKey])
+      })
+    }
   })
   return appState.setIn(['sync', 'objectsById'], objectsById)
 }
@@ -338,29 +345,33 @@ module.exports.createSiteCache = (appState) => {
  * Cache a sync object's key path by objectId.
  * XXX: Currently only caches sites (history and bookmarks).
  * @param {Immutable.Map} appState application state
- * @param {Immutable.Map} siteDetail
+ * @param {Immutable.Map} object object detail (e.g. siteDetail)
+ * @param {string} collectionKey one of CACHED_STATE_COLLECTIONS ('bookmarks', 'bookmarkFolders', 'historySites', 'pinnedSites')
  * @returns {Immutable.Map} new app state
  */
-module.exports.updateSiteCache = (appState, siteDetail) => {
-  if (!siteDetail) { return appState }
-  const siteKey = siteUtil.getSiteKey(siteDetail)
-  const object = appState.getIn(['sites', siteKey])
-  const objectId = (object && object.get('objectId')) || siteDetail.get('objectId')
+module.exports.updateObjectCache = (appState, object, collectionKey) => {
+  if (!module.exports.syncEnabled() || !object || !collectionKey || !CACHED_STATE_COLLECTIONS.includes(collectionKey)) {
+    return appState
+  }
+  // XXX: Currently only caches sites (history and bookmarks).
+  const stateKeyPath = [collectionKey, siteUtil.getSiteKey(object)]
+  const stateObject = appState.getIn(stateKeyPath)
+  const objectId = (stateObject && stateObject.get('objectId')) || object.get('objectId')
   if (!objectId) { return appState }
   const cacheKey = ['sync', 'objectsById', objectId.toJS().join('|')]
-  if (object) {
-    return appState.setIn(cacheKey, ['sites', siteKey])
+  if (stateObject) {
+    return appState.setIn(cacheKey, stateKeyPath)
   } else {
     return appState.deleteIn(cacheKey)
   }
 }
 
 /**
- * Given an objectId and category, return the matching browser object.
+ * Given an objectId, return the matching browser object.
  * @param {Immutable.List} objectId
  * @param {string} category
  * @param {Immutable.Map=} appState
- * @returns {Array} [<Array>, <Immutable.Map>] array is AppStore searchKeyPath e.g. ['sites', 10] for use with updateIn
+ * @returns {Array} [<Array>, <Immutable.Map>] array is AppStore searchKeyPath e.g. ['bookmarkSites', 10] for use with updateIn
  */
 const getObjectById = (objectId, category, appState) => {
   if (!(objectId instanceof Immutable.List)) {
@@ -437,7 +448,7 @@ module.exports.now = () => {
  */
 module.exports.isSyncable = (type, item) => {
   if (type === 'bookmark') {
-    return siteUtil.isBookmark(item) || siteUtil.isFolder(item)
+    return bookmarkUtil.isBookmark(item) || bookmarkFoldersUtil.isFolder(item)
   } else if (type === 'siteSetting') {
     for (let field in module.exports.siteSettingDefaults) {
       if (item.has(field)) {
@@ -472,13 +483,13 @@ const findOrCreateFolderObjectId = (folderId, appState) => {
     const AppStore = require('../stores/appStore')
     appState = AppStore.getState()
   }
-  const folder = appState.getIn(['sites', folderId.toString()])
+  const folder = appState.getIn(['bookmarkFolders', folderId.toString()])
   if (!folder) { return undefined }
   const objectId = folder.get('objectId')
   if (objectId) {
     return objectId.toJS()
   } else {
-    return module.exports.newObjectId(['sites', folderId.toString()])
+    return module.exports.newObjectId(['bookmarkFolders', folderId.toString()])
   }
 }
 
@@ -515,20 +526,22 @@ module.exports.createSiteData = (site, appState) => {
   let value
   if (module.exports.isSyncable('bookmark', immutableSite)) {
     name = 'bookmark'
+    const isFolder = bookmarkFoldersUtil.isFolder(immutableSite)
+    const sitesCollection = isFolder ? 'bookmarkFolders' : 'bookmarks'
     objectId = site.objectId ||
       folderToObjectMap[site.folderId] ||
-      module.exports.newObjectId(['sites', siteKey])
+      module.exports.newObjectId([sitesCollection, siteKey])
     parentFolderObjectId = site.parentFolderObjectId ||
       folderToObjectMap[site.parentFolderId] ||
       findOrCreateFolderObjectId(site.parentFolderId, appState)
     value = {
       site: siteData,
-      isFolder: siteUtil.isFolder(immutableSite),
+      isFolder,
       hideInToolbar: site.parentFolderId === -1,
       parentFolderObjectId
     }
   } else if (siteUtil.isHistoryEntry(immutableSite)) {
-    objectId = site.objectId || module.exports.newObjectId(['sites', siteKey])
+    objectId = site.objectId || module.exports.newObjectId(['historySites', siteKey])
     name = 'historySite'
     value = siteData
   }

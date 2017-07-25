@@ -142,10 +142,10 @@ describe('syncUtil', () => {
   describe('getExistingObject', function () {
   })
 
-  describe('createSiteCache', function () {
+  describe('createObjectCache', function () {
   })
 
-  describe('updateSiteCache', function () {
+  describe('updateObjectCache', function () {
   })
 
   describe('now', function () {
