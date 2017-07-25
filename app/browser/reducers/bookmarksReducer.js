@@ -34,17 +34,11 @@ const bookmarksReducer = (state, action, immutableAction) => {
         if (Immutable.List.isList(bookmark)) {
           action.get('siteDetail', Immutable.List()).forEach((bookmark) => {
             state = bookmarksState.addBookmark(state, bookmark, closestKey)
-
-            if (syncUtil.syncEnabled()) {
-              state = syncUtil.updateSiteCache(state, bookmark)
-            }
+            state = syncUtil.updateObjectCache(state, bookmark, 'bookmarks')
           })
         } else {
           state = bookmarksState.addBookmark(state, bookmark, closestKey)
-
-          if (syncUtil.syncEnabled()) {
-            state = syncUtil.updateSiteCache(state, bookmark)
-          }
+          state = syncUtil.updateObjectCache(state, bookmark, 'bookmarks')
         }
 
         state = bookmarkUtil.updateActiveTabBookmarked(state)
@@ -59,10 +53,7 @@ const bookmarksReducer = (state, action, immutableAction) => {
         }
 
         state = bookmarksState.editBookmark(state, bookmark, action.get('editKey'))
-
-        if (syncUtil.syncEnabled()) {
-          state = syncUtil.updateSiteCache(state, bookmark)
-        }
+        state = syncUtil.updateObjectCache(state, bookmark, 'bookmarks')
 
         state = bookmarkUtil.updateActiveTabBookmarked(state)
         break
@@ -77,10 +68,8 @@ const bookmarksReducer = (state, action, immutableAction) => {
           action.get('moveIntoParent')
         )
 
-        if (syncUtil.syncEnabled()) {
-          const destinationDetail = state.getIn(['sites', action.get('destinationKey')])
-          state = syncUtil.updateSiteCache(state, destinationDetail)
-        }
+        const destinationDetail = state.getIn(['bookmarks', action.get('destinationKey')])
+        state = syncUtil.updateObjectCache(state, destinationDetail, 'bookmarks')
         break
       }
     case appConstants.APP_REMOVE_BOOKMARK:

@@ -29,17 +29,11 @@ const bookmarkFoldersReducer = (state, action, immutableAction) => {
         if (Immutable.List.isList(folder)) {
           action.get('folderDetails', Immutable.List()).forEach((folder) => {
             state = bookmarkFoldersState.addFolder(state, folder, closestKey)
-
-            if (syncUtil.syncEnabled()) {
-              state = syncUtil.updateSiteCache(state, folder)
-            }
+            state = syncUtil.updateObjectCache(state, folder, 'bookmarkFolders')
           })
         } else {
           state = bookmarkFoldersState.addFolder(state, folder, closestKey)
-
-          if (syncUtil.syncEnabled()) {
-            state = syncUtil.updateSiteCache(state, folder)
-          }
+          state = syncUtil.updateObjectCache(state, folder, 'bookmarkFolders')
         }
         break
       }
@@ -52,10 +46,7 @@ const bookmarkFoldersReducer = (state, action, immutableAction) => {
         }
 
         state = bookmarkFoldersState.editFolder(state, folder, action.get('editKey'))
-
-        if (syncUtil.syncEnabled()) {
-          state = syncUtil.updateSiteCache(state, folder)
-        }
+        state = syncUtil.updateObjectCache(state, folder, 'bookmarkFolders')
 
         break
       }
@@ -69,15 +60,15 @@ const bookmarkFoldersReducer = (state, action, immutableAction) => {
           action.get('moveIntoParent')
         )
 
-        if (syncUtil.syncEnabled()) {
-          const destinationDetail = state.getIn(['sites', action.get('destinationKey')])
-          state = syncUtil.updateSiteCache(state, destinationDetail)
-        }
+        const destinationDetail = state.getIn(['bookmarkFolders', action.get('destinationKey')])
+        state = syncUtil.updateObjectCache(state, destinationDetail, 'bookmarkFolders')
         break
       }
     case appConstants.APP_REMOVE_BOOKMARK_FOLDER:
       {
+        const folder = state.getIn(['bookmarkFolders', action.get('folderKey')])
         state = bookmarkFoldersState.removeFolder(state, action.get('folderKey'))
+        state = syncUtil.updateObjectCache(state, folder, 'bookmarkFolders')
         break
       }
   }

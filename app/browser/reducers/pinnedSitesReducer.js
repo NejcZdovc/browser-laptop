@@ -34,9 +34,7 @@ const pinnedSitesReducer = (state, action, immutableAction) => {
           } else {
             state = pinnedSitesState.removePinnedSite(state, siteDetail)
           }
-          if (syncUtil.syncEnabled()) {
-            state = syncUtil.updateSiteCache(state, siteDetail)
-          }
+          state = syncUtil.updateObjectCache(state, siteDetail, 'pinnedSites')
         }
         break
       }
@@ -57,11 +55,8 @@ const pinnedSitesReducer = (state, action, immutableAction) => {
           action.prepend
         )
 
-        // TODO do we need this for pinned sites?
-        if (syncUtil.syncEnabled()) {
-          const newSite = state.getIn(['pinnedSites', action.siteKey])
-          state = syncUtil.updateSiteCache(state, newSite)
-        }
+        const newSite = state.getIn(['pinnedSites', action.siteKey])
+        state = syncUtil.updateObjectCache(state, newSite, 'pinnedSites')
         break
       }
   }

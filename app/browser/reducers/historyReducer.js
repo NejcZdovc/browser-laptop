@@ -33,21 +33,16 @@ const historyReducer = (state, action, immutableAction) => {
       }
     case appConstants.APP_ADD_HISTORY_SITE:
       {
-        const isSyncEnabled = syncUtil.syncEnabled()
         const detail = action.get('siteDetail')
 
         if (Immutable.List.isList(detail)) {
           detail.forEach((item) => {
             state = historyState.addSite(state, item)
-            if (isSyncEnabled) {
-              state = syncUtil.updateSiteCache(state, item)
-            }
+            state = syncUtil.updateObjectCache(state, item, 'historySites')
           })
         } else {
           state = historyState.addSite(state, detail)
-          if (isSyncEnabled) {
-            state = syncUtil.updateSiteCache(state, detail)
-          }
+          state = syncUtil.updateObjectCache(state, detail, 'historySites')
         }
 
         calculateTopSites(true)
@@ -65,13 +60,9 @@ const historyReducer = (state, action, immutableAction) => {
           state = historyState.removeSite(state, action.get('historyKey'))
         }
 
-        // TODO fix sync
-        /*
-        if (syncUtil.syncEnabled()) {
-          //syncActions.removeSite(historyState.getSite(state, action.get('historyKey')))
-          //state = syncUtil.updateSiteCache(state, action.get('siteDetail'))
-        }
-        */
+        // TODO: Remove history site
+        // syncActions.removeSite(historyState.getSite(state, action.get('historyKey')))
+        state = syncUtil.updateObjectCache(state, action.get('siteDetail'), 'historySites')
 
         calculateTopSites(true)
         state = aboutHistoryState.setHistory(state, historyState.getSites(state))

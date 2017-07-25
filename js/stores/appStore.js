@@ -793,10 +793,8 @@ const handleAppAction = (action) => {
       if (obj && obj.constructor === Immutable.Map) {
         appState = appState.setIn(action.objectPath.concat(['objectId']),
           action.objectId)
-        // Update the site cache if this is a site
-        if (action.objectPath[0] === 'sites') {
-          appState = syncUtil.updateSiteCache(appState, obj)
-        }
+        appState = syncUtil.updateObjectCache(appState, obj,
+          action.objectPath[0])
       }
       break
     case appConstants.APP_SAVE_SYNC_DEVICES:
@@ -828,7 +826,7 @@ const handleAppAction = (action) => {
       appState = appState.setIn(['sync', 'setupError'], action.error)
       break
     case appConstants.APP_CREATE_SYNC_CACHE:
-      appState = syncUtil.createSiteCache(appState)
+      appState = syncUtil.createObjectCache(appState)
       break
     case appConstants.APP_RESET_SYNC_DATA:
       const sessionStore = require('../../app/sessionStore')
