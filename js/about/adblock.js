@@ -9,19 +9,21 @@ const messages = require('../constants/messages')
 const {ADBLOCK_CUSTOM_RULES} = require('../constants/settings')
 const getSetting = require('../settings').getSetting
 const aboutActions = require('./aboutActions')
-const ImmutableComponent = require('../components/immutableComponent')
-const SwitchControl = require('../components/switchControl')
+const ImmutableComponent = require('../../app/renderer/components/immutableComponent')
+const SwitchControl = require('../../app/renderer/components/common/switchControl')
+const {DefaultTextArea} = require('../../app/renderer/components/common/textbox')
 
-const ipc = window.chrome.ipc
+const {StyleSheet, css} = require('aphrodite/no-important')
+
+const ipc = window.chrome.ipcRenderer
 
 // Stylesheets
 require('../../less/switchControls.less')
-require('../../less/about/itemList.less')
-require('../../less/about/adblock.less')
+require('../../less/about/common.less')
 
 class AdBlockItem extends ImmutableComponent {
-  constructor () {
-    super()
+  constructor (props) {
+    super(props)
     this.onClick = this.onClick.bind(this)
   }
   onClick (e) {
@@ -35,6 +37,7 @@ class AdBlockItem extends ImmutableComponent {
       <SwitchControl id={this.props.resource.get('uuid')}
         rightText={this.props.resource.get('title')}
         className={`switch-${this.props.resource.get('uuid')}`}
+        customRightTextClassName={css(styles.adblockLists__adblockItem__switchControl)}
         disabled={this.props.disabled}
         onClick={this.onClick}
         checkedOn={getSetting(this.prefKey, this.props.settings)} />
@@ -43,8 +46,8 @@ class AdBlockItem extends ImmutableComponent {
 }
 
 class AboutAdBlock extends React.Component {
-  constructor () {
-    super()
+  constructor (props) {
+    super(props)
     this.onChangeCustomFilters = this.onChangeCustomFilters.bind(this)
     this.state = {
       adblock: Immutable.Map(),
@@ -63,37 +66,37 @@ class AboutAdBlock extends React.Component {
   }
   render () {
     const lastUpdateDate = new Date(this.state.adblock.get('lastCheckDate'))
-    return <div className='adblockDetailsPage'>
-      <h2 data-l10n-id='adblock' />
+    return <div className={css(styles.adblockDetailsPage)}>
+      <h2 className={css(styles.adblockDetailsPage__h2)} data-l10n-id='adblock' />
       <list>
         <div role='listitem'>
-          <div className='adblockDetailsPageContent'>
-            <div className='adblockCount'><span data-l10n-id='blockedCountLabel' /> <span className='blockedCountTotal'>{this.state.adblock.get('count') || 0}</span></div>
+          <div className={css(styles.adblockDetailsPageContent)}>
+            <div><span data-l10n-id='blockedCountLabel' /> <span data-test-id='blockedCountTotal'>{this.state.adblock.get('count') || 0}</span></div>
             {
               Number.isNaN(lastUpdateDate.getTime())
               ? null
-              : <div className='adblockLastChecked'><span data-l10n-id='lastUpdateCheckDateLabel' /> <span>{lastUpdateDate.toLocaleDateString()}</span></div>
+              : <div><span data-l10n-id='lastUpdateCheckDateLabel' /> <span>{lastUpdateDate.toLocaleDateString()}</span></div>
             }
             {
               this.state.adblock.get('etag')
-              ? <div className='adblockLastETag'><span data-l10n-id='lastCheckETagLabel' /> <span>{this.state.adblock.get('etag')}</span></div>
+              ? <div><span data-l10n-id='lastCheckETagLabel' /> <span>{this.state.adblock.get('etag')}</span></div>
               : null
             }
-            <h3 data-l10n-id='additionalFilterLists' />
-            <div className='adblockSubtext' data-l10n-id='adblockTooManyListsWarning' />
-            <div className='adblockLists'>
+            <h3 className={css(styles.adblockDetailsPage__h3)} data-l10n-id='additionalFilterLists' />
+            <div className={css(styles.adblockSubtext)} data-l10n-id='adblockTooManyListsWarning' />
+            <div className={css(styles.adblockLists)}>
               {
                 this.state.resources.map((resource) =>
                   <AdBlockItem resource={resource}
                     settings={this.state.settings} />)
               }
             </div>
-            <h3 data-l10n-id='customFilters' />
-            <div className='adblockSubtext' data-l10n-id='customFilterDescription' />
-            <textarea
+            <h3 className={css(styles.adblockDetailsPage__h3)} data-l10n-id='customFilters' />
+            <div className={css(styles.adblockSubtext)} data-l10n-id='customFilterDescription' />
+            <DefaultTextArea
               onChange={this.onChangeCustomFilters}
               value={getSetting(ADBLOCK_CUSTOM_RULES, this.state.settings) || ''}
-              className='customFiltersInput'
+              data-test-id='customFiltersInput'
               cols='100'
               rows='10'
               spellCheck='false' />
@@ -109,5 +112,36 @@ class AboutAdBlock extends React.Component {
     aboutActions.updateCustomAdblockRules(e.target.value)
   }
 }
+
+const styles = StyleSheet.create({
+  adblockDetailsPage: {
+    margin: '20px',
+    minWidth: '704px'
+  },
+  adblockDetailsPage__h2: {
+    marginBottom: '10px'
+  },
+  adblockDetailsPage__h3: {
+    marginTop: '20px',
+    marginBottom: '10px'
+  },
+  adblockDetailsPageContent: {
+    marginBottom: '10px'
+  },
+
+  adblockLists: {
+    marginTop: '10px'
+  },
+  adblockLists__adblockItem__switchControl: {
+    // TODO: refactor switchControl to remove !important
+    marginLeft: '15px !important'
+  },
+
+  adblockSubtext: {
+    fontSize: 'smaller',
+    fontWeight: 'bold',
+    marginBottom: '10px'
+  }
+})
 
 module.exports = <AboutAdBlock />

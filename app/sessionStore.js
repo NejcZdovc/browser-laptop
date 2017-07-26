@@ -12,27 +12,52 @@
 // - NODE_ENV of ‘test’ bypassing session state or else they all fail.
 
 const Immutable = require('immutable')
-const fs = require('fs')
+const fs = require('fs-extra')
 const path = require('path')
 const electron = require('electron')
+const os = require('os')
 const app = electron.app
 const locale = require('./locale')
 const UpdateStatus = require('../js/constants/updateStatus')
 const settings = require('../js/constants/settings')
 const downloadStates = require('../js/constants/downloadStates')
-const {tabFromFrame} = require('../js/state/frameStateUtil')
 const siteUtil = require('../js/state/siteUtil')
 const { topSites, pinnedTopSites } = require('../js/data/newTabData')
+const { defaultSiteSettingsList } = require('../js/data/siteSettingsList')
 const sessionStorageVersion = 1
 const filtering = require('./filtering')
 const autofill = require('./autofill')
 const {navigatableTypes} = require('../js/lib/appUrlUtil')
-// const tabState = require('./common/state/tabState')
 const Channel = require('./channel')
+const { makeImmutable } = require('./common/state/immutableUtil')
+const tabState = require('./common/state/tabState')
+const windowState = require('./common/state/windowState')
 
+const platformUtil = require('./common/lib/platformUtil')
 const getSetting = require('../js/settings').getSetting
-const promisify = require('../js/lib/promisify')
 const sessionStorageName = `session-store-${sessionStorageVersion}`
+
+const getTopSiteMap = () => {
+  if (Array.isArray(topSites) && topSites.length) {
+    let siteMap = {}
+    let order = 0
+    topSites.forEach((site) => {
+      let key = siteUtil.getSiteKey(Immutable.fromJS(site))
+      site.order = order++
+      siteMap[key] = site
+    })
+    return siteMap
+  }
+  return {}
+}
+
+const getTempStoragePath = (filename) => {
+  const epochTimestamp = (new Date()).getTime().toString()
+  filename = filename || 'tmp'
+  return process.env.NODE_ENV !== 'test'
+    ? path.join(app.getPath('userData'), 'session-store-' + filename + '-' + epochTimestamp)
+    : path.join(process.env.HOME, '.brave-test-session-store-' + filename + '-' + epochTimestamp)
+}
 
 const getStoragePath = () => {
   return path.join(app.getPath('userData'), sessionStorageName)
@@ -48,45 +73,36 @@ const getStoragePath = () => {
 module.exports.saveAppState = (payload, isShutdown) => {
   return new Promise((resolve, reject) => {
     // Don't persist private frames
-    let startupModeSettingValue
-    if (require('../js/stores/appStore').getState()) {
-      startupModeSettingValue = getSetting(settings.STARTUP_MODE)
-    }
-    const savePerWindowState = startupModeSettingValue === undefined ||
+    let startupModeSettingValue = getSetting(settings.STARTUP_MODE)
+    const savePerWindowState = startupModeSettingValue == null ||
       startupModeSettingValue === 'lastTime'
     if (payload.perWindowState && savePerWindowState) {
       payload.perWindowState.forEach((wndPayload) => {
         wndPayload.frames = wndPayload.frames.filter((frame) => !frame.isPrivate)
-      })
-      // tabs will be auto-reset to what the frame is in cleanAppData but just in
-      // case clean fails we don't want to save private tabs.
-      payload.perWindowState.forEach((wndPayload) => {
-        wndPayload.tabs = wndPayload.tabs.filter((tab) => !tab.isPrivate)
       })
     } else {
       delete payload.perWindowState
     }
 
     try {
-      module.exports.cleanAppData(payload, isShutdown)
+      payload = module.exports.cleanAppData(payload, isShutdown)
       payload.cleanedOnShutdown = isShutdown
     } catch (e) {
       payload.cleanedOnShutdown = false
     }
     payload.lastAppVersion = app.getVersion()
 
-    const epochTimestamp = (new Date()).getTime().toString()
-    const tmpStoragePath = process.env.NODE_ENV !== 'test'
-      ? path.join(app.getPath('userData'), 'session-store-tmp-' + epochTimestamp)
-      : path.join(process.env.HOME, '.brave-test-session-store-tmp-' + epochTimestamp)
-
-    let p = promisify(fs.writeFile, tmpStoragePath, JSON.stringify(payload))
-      .then(() => promisify(fs.rename, tmpStoragePath, getStoragePath()))
     if (isShutdown) {
-      p = p.then(module.exports.cleanSessionDataOnShutdown())
+      module.exports.cleanSessionDataOnShutdown()
     }
-    p.then(resolve)
-      .catch(reject)
+
+    muon.file.writeImportant(getStoragePath(), JSON.stringify(payload), (success) => {
+      if (success) {
+        resolve()
+      } else {
+        reject(new Error('Could not save app state to ' + getStoragePath()))
+      }
+    })
   })
 }
 
@@ -97,6 +113,8 @@ module.exports.cleanPerWindowData = (perWindowData, isShutdown) => {
   if (!perWindowData) {
     perWindowData = {}
   }
+  // delete the frame index because tabId is per-session
+  delete perWindowData.framesInternal
   // Hide the context menu when we restore.
   delete perWindowData.contextMenuDetail
   // Don't save preview frame since they are only related to hovering on a tab
@@ -111,11 +129,14 @@ module.exports.cleanPerWindowData = (perWindowData, isShutdown) => {
   delete perWindowData.bookmarkDetail
   // Don't restore bravery panel
   delete perWindowData.braveryPanelDetail
-  // Don't restore cache clearing popup
-  delete perWindowData.clearBrowsingDataDetail
-  // Don't restore drag data
+  // Don't restore drag data and clearBrowsingDataPanel's visibility
   if (perWindowData.ui) {
+    // This is no longer stored, we can remove this line eventually
+    delete perWindowData.ui.isFocused
+    delete perWindowData.ui.mouseInTitlebar
+    delete perWindowData.ui.mouseInFrame
     delete perWindowData.ui.dragging
+    delete perWindowData.ui.isClearBrowsingDataPanelVisible
   }
   perWindowData.frames = perWindowData.frames || []
   let newKey = 0
@@ -129,10 +150,6 @@ module.exports.cleanPerWindowData = (perWindowData, isShutdown) => {
       frame.unloaded = true
     }
     frame.key = newKey
-    // Full history is not saved yet
-    // TODO (bsclifton): remove this when https://github.com/brave/browser-laptop/issues/963 is complete
-    frame.canGoBack = false
-    frame.canGoForward = false
 
     // Set the frame src to the last visited location
     // or else users will see the first visited URL.
@@ -153,7 +170,10 @@ module.exports.cleanPerWindowData = (perWindowData, isShutdown) => {
     delete frame.httpsEverywhere
     delete frame.adblock
     delete frame.noScript
-    delete frame.trackingProtection
+
+    // clean up any legacy frame opening props
+    delete frame.openInForeground
+    delete frame.disposition
 
     // Guest instance ID's are not valid after restarting.
     // Electron won't know about them.
@@ -193,14 +213,15 @@ module.exports.cleanPerWindowData = (perWindowData, isShutdown) => {
     // don't regenerate new frame keys when opening storage.
     delete frame.parentFrameKey
     // Delete the active shortcut details
+    delete frame.activeShortcut
     delete frame.activeShortcutDetails
 
     if (frame.navbar && frame.navbar.urlbar) {
-      frame.navbar.urlbar.urlPreview = null
       if (frame.navbar.urlbar.suggestions) {
         frame.navbar.urlbar.suggestions.selectedIndex = null
         frame.navbar.urlbar.suggestions.suggestionList = null
       }
+      delete frame.navbar.urlbar.searchDetail
     }
   }
   const clearHistory = isShutdown && getSetting(settings.SHUTDOWN_CLEAR_HISTORY) === true
@@ -220,8 +241,6 @@ module.exports.cleanPerWindowData = (perWindowData, isShutdown) => {
       .filter((frame) => !frame.pinnedLocation)
     perWindowData.frames.forEach(cleanFrame)
   }
-  // Always recalculate tab data from frame data
-  perWindowData.tabs = perWindowData.frames.map((frame) => tabFromFrame(frame))
 }
 
 /**
@@ -231,17 +250,16 @@ module.exports.cleanPerWindowData = (perWindowData, isShutdown) => {
  * WARNING: getPrefs is only available in this function when isShutdown is true
  */
 module.exports.cleanAppData = (data, isShutdown) => {
-  if (data.settings) {
-    // useragent value gets recalculated on restart
-    data.settings[settings.USERAGENT] = undefined
-  }
+  // make a copy
+  // TODO(bridiver) use immutable
+  data = makeImmutable(data).toJS()
+
   // Don't show notifications from the last session
   data.notifications = []
   // Delete temp site settings
   data.temporarySiteSettings = {}
-  // Delete Flash state since this is checked on startup
-  delete data.flashInitialized
-  if (data.settings[settings.CHECK_DEFAULT_ON_STARTUP] === true) {
+
+  if (data.settings && data.settings[settings.CHECK_DEFAULT_ON_STARTUP] === true) {
     // Delete defaultBrowserCheckComplete state since this is checked on startup
     delete data.defaultBrowserCheckComplete
   }
@@ -249,25 +267,40 @@ module.exports.cleanAppData = (data, isShutdown) => {
   try {
     delete data.ui.about.preferences.recoverySucceeded
   } catch (e) {}
-  // We used to store a huge list of IDs but we didn't use them.
-  // Get rid of them here.
-  delete data.windows
+
   if (data.perWindowState) {
     data.perWindowState.forEach((perWindowState) =>
       module.exports.cleanPerWindowData(perWindowState, isShutdown))
   }
   const clearAutocompleteData = isShutdown && getSetting(settings.SHUTDOWN_CLEAR_AUTOCOMPLETE_DATA) === true
   if (clearAutocompleteData) {
-    autofill.clearAutocompleteData()
+    try {
+      autofill.clearAutocompleteData()
+    } catch (e) {
+      console.log('cleanAppData: error calling autofill.clearAutocompleteData: ', e)
+    }
   }
   const clearAutofillData = isShutdown && getSetting(settings.SHUTDOWN_CLEAR_AUTOFILL_DATA) === true
   if (clearAutofillData) {
     autofill.clearAutofillData()
     const date = new Date().getTime()
-    data.autofill.addresses.guid = []
-    data.autofill.addresses.timestamp = date
-    data.autofill.creditCards.guid = []
-    data.autofill.creditCards.timestamp = date
+    data.autofill = {
+      addresses: {
+        guid: [],
+        timestamp: date
+      },
+      creditCards: {
+        guid: [],
+        timestamp: date
+      }
+    }
+  }
+  if (data.dragData) {
+    delete data.dragData
+  }
+  if (data.sync) {
+    // clear sync site cache
+    data.sync.objectsById = {}
   }
   const clearSiteSettings = isShutdown && getSetting(settings.SHUTDOWN_CLEAR_SITE_SETTINGS) === true
   if (clearSiteSettings) {
@@ -284,6 +317,8 @@ module.exports.cleanAppData = (data, isShutdown) => {
     if (typeof noScript === 'number') {
       delete data.siteSettings[host].noScript
     }
+    // Don't persist any noScript exceptions
+    delete data.siteSettings[host].noScriptExceptions
     // Don't write runInsecureContent to session
     delete data.siteSettings[host].runInsecureContent
     // If the site setting is empty, delete it for privacy
@@ -295,6 +330,10 @@ module.exports.cleanAppData = (data, isShutdown) => {
     const clearHistory = isShutdown && getSetting(settings.SHUTDOWN_CLEAR_HISTORY) === true
     if (clearHistory) {
       data.sites = siteUtil.clearHistory(Immutable.fromJS(data.sites)).toJS()
+      if (data.about) {
+        delete data.about.history
+        delete data.about.newtab
+      }
     }
   }
   if (data.downloads) {
@@ -317,21 +356,31 @@ module.exports.cleanAppData = (data, isShutdown) => {
       })
     }
   }
-  // all data in tabs is transient while we make the transition from window to app state
-  delete data.tabs
-  // if (data.tabs) {
-  //   data.tabs = data.tabs.map((tab) => tabState.getPersistentTabState(tab).toJS())
-  // }
+
+  if (data.menu) {
+    delete data.menu
+  }
+
+  try {
+    data = tabState.getPersistentState(data).toJS()
+  } catch (e) {
+    delete data.tabs
+    console.log('cleanAppData: error calling tabState.getPersistentState: ', e)
+  }
+
+  try {
+    data = windowState.getPersistentState(data).toJS()
+  } catch (e) {
+    delete data.windows
+    console.log('cleanAppData: error calling windowState.getPersistentState: ', e)
+  }
+
   if (data.extensions) {
     Object.keys(data.extensions).forEach((extensionId) => {
       delete data.extensions[extensionId].tabs
     })
   }
-
-  if (data.about) {
-    delete data.about.brave
-    delete data.about.history
-  }
+  return data
 }
 
 /**
@@ -339,41 +388,150 @@ module.exports.cleanAppData = (data, isShutdown) => {
  * @return a promise which resolve when the work is done.
  */
 module.exports.cleanSessionDataOnShutdown = () => {
-  let p = Promise.resolve()
   if (getSetting(settings.SHUTDOWN_CLEAR_ALL_SITE_COOKIES) === true) {
-    p = p.then(filtering.clearStorageData())
+    filtering.clearStorageData()
   }
   if (getSetting(settings.SHUTDOWN_CLEAR_CACHE) === true) {
-    p = p.then(filtering.clearCache())
+    filtering.clearCache()
   }
-  return p
+  if (getSetting(settings.SHUTDOWN_CLEAR_HISTORY) === true) {
+    filtering.clearHistory()
+  }
+}
+
+const safeGetVersion = (fieldName, getFieldVersion) => {
+  const versionField = {
+    name: fieldName,
+    version: undefined
+  }
+  try {
+    if (typeof getFieldVersion === 'function') {
+      versionField.version = getFieldVersion()
+      return versionField
+    }
+    console.log('ERROR getting value for field ' + fieldName + ' in sessionStore::setVersionInformation(): ', getFieldVersion, ' is not a function')
+  } catch (e) {
+    console.log('ERROR getting value for field ' + fieldName + ' in sessionStore::setVersionInformation(): ', e)
+  }
+  return versionField
 }
 
 /**
  * version information (shown on about:brave)
  */
 const setVersionInformation = (data) => {
-  try {
-    const os = require('os')
-    const versionInformation = [
-      {name: 'Brave', version: app.getVersion()},
-      {name: 'Muon', version: process.versions['atom-shell']},
-      {name: 'libchromiumcontent', version: process.versions['chrome']},
-      {name: 'V8', version: process.versions.v8},
-      {name: 'Node.js', version: process.versions.node},
-      {name: 'Update Channel', version: Channel.channel()},
-      {name: 'os.platform', version: os.platform()},
-      {name: 'os.release', version: os.release()},
-      {name: 'os.arch', version: os.arch()}
-      // TODO(bsclifton): read the latest commit hash from a file, etc.
-    ]
-    data.about = data.about || {}
-    data.about.brave = {
-      versionInformation: versionInformation
-    }
-  } catch (e) {
-    console.log('ERROR calling sessionStore::setVersionInformation(): ', e)
+  const versionFields = [
+    ['Brave', app.getVersion],
+    ['rev', Channel.browserLaptopRev],
+    ['Muon', () => { return process.versions['atom-shell'] }],
+    ['libchromiumcontent', () => { return process.versions['chrome'] }],
+    ['V8', () => { return process.versions.v8 }],
+    ['Node.js', () => { return process.versions.node }],
+    ['Update Channel', Channel.channel],
+    ['OS Platform', () => platformUtil.formatOsPlatform(os.platform())],
+    ['OS Release', os.release],
+    ['OS Architecture', os.arch]
+  ]
+  const versionInformation = []
+
+  versionFields.forEach((field) => {
+    versionInformation.push(safeGetVersion(field[0], field[1]))
+  })
+
+  data.about = data.about || {}
+  data.about.brave = {
+    versionInformation: versionInformation
   }
+  return data
+}
+
+module.exports.runPreMigrations = (data) => {
+  // autofill data migration
+  if (data.autofill) {
+    if (Array.isArray(data.autofill.addresses)) {
+      let addresses = exports.defaultAppState().autofill.addresses
+      data.autofill.addresses.forEach((guid) => {
+        addresses.guid.push(guid)
+        addresses.timestamp = new Date().getTime()
+      })
+      data.autofill.addresses = addresses
+    }
+    if (Array.isArray(data.autofill.creditCards)) {
+      let creditCards = exports.defaultAppState().autofill.creditCards
+      data.autofill.creditCards.forEach((guid) => {
+        creditCards.guid.push(guid)
+        creditCards.timestamp = new Date().getTime()
+      })
+      data.autofill.creditCards = creditCards
+    }
+    if (data.autofill.addresses.guid) {
+      let guids = []
+      data.autofill.addresses.guid.forEach((guid) => {
+        if (typeof guid === 'object') {
+          guids.push(guid['persist:default'])
+        } else {
+          guids.push(guid)
+        }
+      })
+      data.autofill.addresses.guid = guids
+    }
+    if (data.autofill.creditCards.guid) {
+      let guids = []
+      data.autofill.creditCards.guid.forEach((guid) => {
+        if (typeof guid === 'object') {
+          guids.push(guid['persist:default'])
+        } else {
+          guids.push(guid)
+        }
+      })
+      data.autofill.creditCards.guid = guids
+    }
+  }
+  // xml migration
+  if (data.settings) {
+    if (data.settings[settings.DEFAULT_SEARCH_ENGINE] === 'content/search/google.xml') {
+      data.settings[settings.DEFAULT_SEARCH_ENGINE] = 'Google'
+    }
+    if (data.settings[settings.DEFAULT_SEARCH_ENGINE] === 'content/search/duckduckgo.xml') {
+      data.settings[settings.DEFAULT_SEARCH_ENGINE] = 'DuckDuckGo'
+    }
+  }
+
+  return data
+}
+
+module.exports.runPostMigrations = (data) => {
+  // sites refactoring migration
+  if (Array.isArray(data.sites) && data.sites.length) {
+    let sites = {}
+    let order = 0
+    data.sites.forEach((site) => {
+      let key = siteUtil.getSiteKey(Immutable.fromJS(site))
+      site.order = order++
+      sites[key] = site
+    })
+    data.sites = sites
+  }
+
+  return data
+}
+
+module.exports.runImportDefaultSettings = (data) => {
+  // import default site settings list
+  if (!data.defaultSiteSettingsListImported) {
+    for (var i = 0; i < defaultSiteSettingsList.length; ++i) {
+      let setting = defaultSiteSettingsList[i]
+      if (!data.siteSettings[setting.pattern]) {
+        data.siteSettings[setting.pattern] = {}
+      }
+      let targetSetting = data.siteSettings[setting.pattern]
+      if (!targetSetting.hasOwnProperty[setting.name]) {
+        targetSetting[setting.name] = setting.value
+      }
+    }
+    data.defaultSiteSettingsListImported = true
+  }
+
   return data
 }
 
@@ -390,64 +548,31 @@ module.exports.loadAppState = () => {
       data = fs.readFileSync(getStoragePath())
     } catch (e) {}
 
+    let loaded = false
     try {
       data = JSON.parse(data)
-      // autofill data migration
-      if (data.autofill) {
-        if (Array.isArray(data.autofill.addresses)) {
-          let addresses = exports.defaultAppState().autofill.addresses
-          data.autofill.addresses.forEach((guid) => {
-            addresses.guid.push(guid)
-            addresses.timestamp = new Date().getTime()
-          })
-          data.autofill.addresses = addresses
-        }
-        if (Array.isArray(data.autofill.creditCards)) {
-          let creditCards = exports.defaultAppState().autofill.creditCards
-          data.autofill.creditCards.forEach((guid) => {
-            creditCards.guid.push(guid)
-            creditCards.timestamp = new Date().getTime()
-          })
-          data.autofill.creditCards = creditCards
-        }
-        if (data.autofill.addresses.guid) {
-          let guids = []
-          data.autofill.addresses.guid.forEach((guid) => {
-            if (typeof guid === 'object') {
-              guids.push(guid['persist:default'])
-            } else {
-              guids.push(guid)
-            }
-          })
-          data.autofill.addresses.guid = guids
-        }
-        if (data.autofill.creditCards.guid) {
-          let guids = []
-          data.autofill.creditCards.guid.forEach((guid) => {
-            if (typeof guid === 'object') {
-              guids.push(guid['persist:default'])
-            } else {
-              guids.push(guid)
-            }
-          })
-          data.autofill.creditCards.guid = guids
-        }
+      loaded = true
+    } catch (e) {
+      // Session state might be corrupted; let's backup this
+      // corrupted value for people to report into support.
+      module.exports.backupSession()
+      if (data) {
+        console.log('could not parse data: ', data, e)
       }
-      // xml migration
-      if (data.settings) {
-        if (data.settings[settings.DEFAULT_SEARCH_ENGINE] === 'content/search/google.xml') {
-          data.settings[settings.DEFAULT_SEARCH_ENGINE] = 'Google'
-        }
-        if (data.settings[settings.DEFAULT_SEARCH_ENGINE] === 'content/search/duckduckgo.xml') {
-          data.settings[settings.DEFAULT_SEARCH_ENGINE] = 'DuckDuckGo'
-        }
-      }
+      data = exports.defaultAppState()
+      data = module.exports.runImportDefaultSettings(data)
+    }
+
+    if (loaded) {
+      data = module.exports.runPreMigrations(data)
+
       // Clean app data here if it wasn't cleared on shutdown
       if (data.cleanedOnShutdown !== true || data.lastAppVersion !== app.getVersion()) {
-        module.exports.cleanAppData(data, false)
+        data = module.exports.cleanAppData(data, false)
       }
       data = Object.assign(module.exports.defaultAppState(), data)
       data.cleanedOnShutdown = false
+
       // Always recalculate the update status
       if (data.updates) {
         const updateStatus = data.updates.status
@@ -463,14 +588,13 @@ module.exports.loadAppState = () => {
           return
         }
       }
-      data = setVersionInformation(data)
-    } catch (e) {
-      // TODO: Session state is corrupted, maybe we should backup this
-      // corrupted value for people to report into support.
-      console.log('could not parse data: ', data)
-      data = exports.defaultAppState()
-      data = setVersionInformation(data)
+
+      data = module.exports.runPostMigrations(data)
+      data = module.exports.runImportDefaultSettings(data)
     }
+
+    data = setVersionInformation(data)
+
     locale.init(data.settings[settings.LANGUAGE]).then((locale) => {
       app.setLocale(locale)
       resolve(data)
@@ -479,13 +603,39 @@ module.exports.loadAppState = () => {
 }
 
 /**
+ * Called when session is suspected for corruption; this will move it out of the way
+ */
+module.exports.backupSession = () => {
+  const src = getStoragePath()
+  const dest = getTempStoragePath('backup')
+
+  if (fs.existsSync(src)) {
+    try {
+      fs.copySync(src, dest)
+      console.log('An error occurred. For support purposes, file "' + src + '" has been copied to "' + dest + '".')
+    } catch (e) {
+      console.log('backupSession: error making copy of session file: ', e)
+    }
+  }
+}
+
+/**
  * Obtains the default application level state
  */
 module.exports.defaultAppState = () => {
   return {
     firstRunTimestamp: new Date().getTime(),
-    sites: topSites,
+    sync: {
+      devices: {},
+      lastFetchTimestamp: 0,
+      objectsById: {},
+      pendingRecords: {},
+      lastConfirmedRecordTimestamp: 0
+    },
+    locationSiteKeysCache: undefined,
+    sites: getTopSiteMap(),
     tabs: [],
+    windows: [],
     extensions: {},
     visits: [],
     settings: {},
@@ -493,10 +643,6 @@ module.exports.defaultAppState = () => {
     passwords: [],
     notifications: [],
     temporarySiteSettings: {},
-    dictionary: {
-      addedWords: [],
-      ignoredWords: []
-    },
     autofill: {
       addresses: {
         guid: [],
@@ -514,9 +660,22 @@ module.exports.defaultAppState = () => {
         sites: topSites,
         ignoredTopSites: [],
         pinnedTopSites: pinnedTopSites
+      },
+      welcome: {
+        showOnLoad: !['test', 'development'].includes(process.env.NODE_ENV)
       }
     },
-    defaultWindowParams: {}
+    trackingProtection: {
+      count: 0
+    },
+    adblock: {
+      count: 0
+    },
+    httpsEverywhere: {
+      count: 0
+    },
+    defaultWindowParams: {},
+    searchDetail: null
   }
 }
 

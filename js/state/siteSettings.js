@@ -3,7 +3,7 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const Immutable = require('immutable')
-const urlParse = require('url').parse
+const urlParse = require('../../app/common/urlParse')
 
 module.exports.braveryDefaults = (appState, appConfig) => {
   let defaults = {}
@@ -16,6 +16,7 @@ module.exports.braveryDefaults = (appState, appConfig) => {
   let blockAds = defaults[appConfig.resourceNames.ADBLOCK] || false
   let blockTracking = defaults[appConfig.resourceNames.TRACKING_PROTECTION] || false
   let blockCookies = defaults[appConfig.resourceNames.COOKIEBLOCK] || false
+  let blockCookiesAll = defaults[appConfig.resourceNames.COOKIEBLOCK_ALL] || false
   defaults.adControl = 'allowAdsAndTracking'
   if (blockAds && replaceAds && blockTracking) {
     defaults.adControl = 'showBraveAds'
@@ -23,6 +24,9 @@ module.exports.braveryDefaults = (appState, appConfig) => {
     defaults.adControl = 'blockAds'
   }
   defaults.cookieControl = blockCookies ? 'block3rdPartyCookie' : 'allowAllCookies'
+  if (blockCookiesAll) {
+    defaults.cookieControl = 'blockAllCookies'
+  }
 
   // TODO(bridiver) this should work just like the other bravery settings
   let fingerprintingProtection = appState.get('settings').get('privacy.block-canvas-fingerprinting')
@@ -50,7 +54,7 @@ module.exports.activeSettings = (siteSettings, appState, appConfig) => {
   Object.keys(appConfig.resourceNames).forEach((resourceName) => {
     let name = appConfig.resourceNames[resourceName]
     settings[name] = (() => {
-      if (settings.shieldsUp === false) {
+      if (settings.shieldsUp === false && appConfig[name].shields !== false) {
         return false
       }
 

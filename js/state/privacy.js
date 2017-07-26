@@ -4,20 +4,26 @@
 
 const AppDispatcher = require('../dispatcher/appDispatcher')
 const AppStore = require('../stores/appStore')
-const AppConstants = require('../constants/appConstants')
+const appConstants = require('../constants/appConstants')
+const {passwordManagers} = require('../constants/passwordManagers')
 const settings = require('../constants/settings')
 const {registerUserPrefs} = require('./userPrefs')
 const getSetting = require('../settings').getSetting
 
 const getPrivacySettings = () => {
-  return { 'autofill.enabled': getSetting(settings.AUTOFILL_ENABLED) }
+  const passwordManagerEnabled = getSetting(settings.ACTIVE_PASSWORD_MANAGER) === passwordManagers.BUILT_IN
+  return { 'autofill.enabled': getSetting(settings.AUTOFILL_ENABLED),
+    'profile.password_manager_enabled': passwordManagerEnabled,
+    'credentials_enable_service': passwordManagerEnabled,
+    'credentials_enable_autosignin': false
+  }
 }
 
 let updateTrigger
 
 // Register callback to handle all updates
 const doAction = (action) => {
-  if (action.actionType === AppConstants.APP_CHANGE_SETTING) {
+  if (action.actionType === appConstants.APP_CHANGE_SETTING) {
     AppDispatcher.waitFor([AppStore.dispatchToken], () => {
       updateTrigger()
     })

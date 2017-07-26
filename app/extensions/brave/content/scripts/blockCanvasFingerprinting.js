@@ -2,6 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/**
+ * Some parts of this file are derived from:
+ * Chameleon <https://github.com/ghostwords/chameleon>, Copyright (C) 2015 ghostwords
+ * Privacy Badger Chrome <https://github.com/EFForg/privacybadger>, Copyright (C) 2015 Electronic Frontier Foundation and other contributors
+ */
+
 if (chrome.contentSettings.canvasFingerprinting == 'block') {
   Error.stackTraceLimit = Infinity // collect all frames
 
@@ -67,17 +73,15 @@ if (chrome.contentSettings.canvasFingerprinting == 'block') {
     return script_url.replace(/:\d+:\d+$/, '')
   }
 
-  function reportBlock (item) {
+  function reportBlock (type) {
     var script_url = getOriginatingScriptUrl()
     var msg = {
-      type: item.type,
-      obj: item.objName,
-      prop: item.propName,
+      type,
       scriptUrl: stripLineAndColumnNumbers(script_url)
     }
 
     // Block the read from occuring; send info to background page instead
-    chrome.ipc.sendToHost('got-canvas-fingerprinting', msg)
+    chrome.ipcRenderer.sendToHost('got-canvas-fingerprinting', msg)
   }
 
   /**
@@ -85,7 +89,11 @@ if (chrome.contentSettings.canvasFingerprinting == 'block') {
    * @param item special item objects
    */
   function trapInstanceMethod (item) {
-    chrome.webFrame.setGlobal(item.objName + ".prototype." + item.propName, reportBlock.bind(null, item))
+    if (!item.methodName) {
+      chrome.webFrame.setGlobal(item.objName + ".prototype." + item.propName, reportBlock.bind(null, item.type))
+    } else {
+      chrome.webFrame.setGlobal(item.methodName, reportBlock.bind(null, item.type))
+    }
   }
 
   var methods = []
@@ -94,8 +102,7 @@ if (chrome.contentSettings.canvasFingerprinting == 'block') {
     var item = {
       type: 'Canvas',
       objName: 'CanvasRenderingContext2D',
-      propName: method,
-      obj: CanvasRenderingContext2D
+      propName: method
     }
 
     methods.push(item)
@@ -106,22 +113,21 @@ if (chrome.contentSettings.canvasFingerprinting == 'block') {
     var item = {
       type: 'Canvas',
       objName: 'HTMLCanvasElement',
-      propName: method,
-      obj: HTMLCanvasElement
+      propName: method
     }
     methods.push(item)
   })
 
   var webglMethods = ['getSupportedExtensions', 'getParameter', 'getContextAttributes',
-    'getShaderPrecisionFormat', 'getExtension']
+    'getShaderPrecisionFormat', 'getExtension', 'readPixels']
   webglMethods.forEach(function (method) {
     var item = {
       type: 'WebGL',
       objName: 'WebGLRenderingContext',
-      propName: method,
-      obj: WebGLRenderingContext
+      propName: method
     }
     methods.push(item)
+    methods.push(Object.assign({}, item, {objName: 'WebGL2RenderingContext'}))
   })
 
   var audioBufferMethods = ['copyFromChannel', 'getChannelData']
@@ -129,8 +135,7 @@ if (chrome.contentSettings.canvasFingerprinting == 'block') {
     var item = {
       type: 'AudioContext',
       objName: 'AudioBuffer',
-      propName: method,
-      obj: AudioBuffer
+      propName: method
     }
     methods.push(item)
   })
@@ -141,8 +146,7 @@ if (chrome.contentSettings.canvasFingerprinting == 'block') {
     var item = {
       type: 'AudioContext',
       objName: 'AnalyserNode',
-      propName: method,
-      obj: AnalyserNode
+      propName: method
     }
     methods.push(item)
   })
@@ -153,11 +157,16 @@ if (chrome.contentSettings.canvasFingerprinting == 'block') {
     var item = {
       type: 'WebRTC',
       objName: 'webkitRTCPeerConnection',
-      propName: method,
-      obj: webkitRTCPeerConnection
+      propName: method
     }
     methods.push(item)
   })
 
   methods.forEach(trapInstanceMethod)
+
+  // Block WebRTC device enumeration
+  trapInstanceMethod({
+    type: 'WebRTC',
+    methodName: 'navigator.mediaDevices.enumerateDevices'
+  })
 }

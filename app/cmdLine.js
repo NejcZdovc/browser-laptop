@@ -10,7 +10,7 @@ const app = electron.app
 const messages = require('../js/constants/messages')
 const BrowserWindow = electron.BrowserWindow
 const appActions = require('../js/actions/appActions')
-const urlParse = require('url').parse
+const urlParse = require('./common/urlParse')
 const {fileUrl} = require('../js/lib/appUrlUtil')
 const sessionStore = require('./sessionStore')
 const isDarwin = process.platform === 'darwin'
@@ -27,7 +27,7 @@ const focusOrOpenWindow = function (url) {
 
   let win = BrowserWindow.getFocusedWindow()
   if (!win) {
-    win = BrowserWindow.getAllWindows()[0]
+    win = BrowserWindow.getActiveWindow() || BrowserWindow.getAllWindows()[0]
     if (win) {
       if (win.isMinimized()) {
         win.restore()
@@ -41,7 +41,10 @@ const focusOrOpenWindow = function (url) {
       location: url
     }))
   } else if (url) {
-    win.webContents.send(messages.SHORTCUT_NEW_FRAME, url)
+    appActions.createTabRequested({
+      url,
+      windowId: win.id
+    })
   }
 
   return true
@@ -114,6 +117,7 @@ app.on('will-finish-launching', () => {
   // User clicked on a file or dragged a file to the dock on macOS
   app.on('open-file', (event, path) => {
     event.preventDefault()
+    path = encodeURI(path)
     if (!focusOrOpenWindow(path)) {
       newWindowURL = path
     }

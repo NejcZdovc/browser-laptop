@@ -5,12 +5,7 @@
 'use strict'
 
 // The package npm task builds this module
-let config = {}
-try {
-  config = require('../js/constants/buildConfig')
-} catch (e) {
-  // noop here - the buildConfig may not exist in dev mode
-}
+const config = require('../js/constants/buildConfig')
 
 // The current channel is retrieved first from the environment,
 // then the buildConfig constants file and finally defaults to dev
@@ -24,3 +19,7 @@ if (!channels.has(channel)) {
 exports.channel = () => {
   return channel
 }
+
+exports.browserLaptopRev = () => process.env.NODE_ENV === 'development'
+  ? require('git-rev-sync').long()
+  : config.BROWSER_LAPTOP_REV

@@ -3,13 +3,17 @@
 
 'use strict'
 
-const Immutable = require('immutable')
+const MenuItem = require('electron').MenuItem
+const {makeImmutable} = require('../../common/state/immutableUtil')
 const CommonMenu = require('../../common/commonMenu')
-const messages = require('../../../js/constants/messages')
 const siteTags = require('../../../js/constants/siteTags')
 const eventUtil = require('../../../js/lib/eventUtil')
 const siteUtil = require('../../../js/state/siteUtil')
 const locale = require('../../locale')
+const appActions = require('../../../js/actions/appActions')
+const config = require('../../../js/constants/config')
+const {separatorMenuItem} = require('../../common/commonMenu')
+const windowActions = require('../../../js/actions/windowActions')
 
 /**
  * Get the an electron MenuItem object from a Menu based on its label
@@ -64,7 +68,7 @@ module.exports.setTemplateItemChecked = (template, label, checked) => {
   const menuItem = getTemplateItem(menu, label)
   if (menuItem.checked !== checked) {
     menuItem.checked = checked
-    return Immutable.fromJS(menu)
+    return makeImmutable(menu)
   }
   return null
 }
@@ -88,9 +92,13 @@ const createBookmarkTemplateItems = (bookmarks, parentFolderId) => {
         label: site.get('customTitle') || site.get('title') || site.get('location'),
         click: (item, focusedWindow, e) => {
           if (eventUtil.isForSecondaryAction(e)) {
-            CommonMenu.sendToFocusedWindow(focusedWindow, [messages.SHORTCUT_NEW_FRAME, site.get('location'), { openInForeground: !!e.shiftKey }])
+            appActions.createTabRequested({
+              url: site.get('location'),
+              windowId: focusedWindow.id,
+              active: !!e.shiftKey
+            })
           } else {
-            CommonMenu.sendToFocusedWindow(focusedWindow, [messages.SHORTCUT_ACTIVE_FRAME_LOAD_URL, site.get('location')])
+            appActions.loadURLInActiveTabRequested(focusedWindow.id, site.get('location'))
           }
         }
       })
@@ -116,33 +124,152 @@ module.exports.createBookmarkTemplateItems = (sites) => {
 }
 
 /**
- * Create "recently closed" history entries for the "History" menu
+ * @param {string} key within closedFrames, i.e. a URL
+ * @return {string}
  */
-module.exports.createRecentlyClosedTemplateItems = (lastClosedFrames) => {
-  const payload = []
-  if (lastClosedFrames && lastClosedFrames.size > 0) {
-    payload.push(
-      CommonMenu.separatorMenuItem,
-      {
-        label: locale.translation('recentlyClosed'),
-        enabled: false
-      })
+const getRecentlyClosedMenuId = function (key) {
+  return `recentlyClosedFrame|${key}`
+}
+module.exports.getRecentlyClosedMenuId = getRecentlyClosedMenuId
 
-    const lastTen = (lastClosedFrames.size < 10) ? lastClosedFrames : lastClosedFrames.slice(-10)
-    lastTen.forEach((closedFrame) => {
-      payload.push({
-        label: closedFrame.get('title') || closedFrame.get('location'),
-        click: (item, focusedWindow, e) => {
-          if (eventUtil.isForSecondaryAction(e)) {
-            CommonMenu.sendToFocusedWindow(focusedWindow, [messages.SHORTCUT_NEW_FRAME, closedFrame.get('location'), { openInForeground: !!e.shiftKey }])
-          } else {
-            CommonMenu.sendToFocusedWindow(focusedWindow, [messages.SHORTCUT_ACTIVE_FRAME_LOAD_URL, closedFrame.get('location')])
-          }
-        }
+/**
+ * @param {string} menuId
+ * @return {string} key within closedFrames, i.e. a URL
+ */
+const getRecentlyClosedMenuKey = function (menuId) {
+  if (typeof menuId !== 'string' || menuId.indexOf('recentlyClosedFrame|') === -1) {
+    return undefined
+  }
+  return menuId.split('|')[1]
+}
+
+const recentlyClosedClickHandler = (frame) => {
+  return (item, focusedWindow, e) => {
+    const location = frame.get('location')
+    if (eventUtil.isForSecondaryAction(e)) {
+      appActions.createTabRequested({
+        url: location,
+        windowId: focusedWindow.id,
+        active: !!e.shiftKey
       })
+    } else {
+      appActions.loadURLInActiveTabRequested(focusedWindow.id, location)
+    }
+  }
+}
+
+const getFrameMenuLabel = (frame) => {
+  return frame.get('title') || frame.get('location')
+}
+
+const recentlyClosedTemplate = (key, frame) => {
+  return {
+    id: getRecentlyClosedMenuId(key),
+    click: recentlyClosedClickHandler(frame),
+    label: getFrameMenuLabel(frame)
+  }
+}
+
+module.exports.recentlyClosedHeadingTemplates = () => {
+  return [
+    {
+      id: 'recentlyClosedSeparator',
+      type: 'separator'
+    },
+    {
+      id: 'recentlyClosedHeading',
+      label: locale.translation('recentlyClosed'),
+      enabled: false
+    }
+  ]
+}
+
+/**
+ * Create "recently closed" history entries for the "History" menu.
+ * Labels and visibility change dynamically in updateRecentlyClosedMenuItems.
+ * @param {Immutable.OrderedMap} closedFrames
+ */
+module.exports.createRecentlyClosedTemplateItems = (closedFrames) => {
+  let payload = module.exports.recentlyClosedHeadingTemplates()
+  if (!closedFrames || !closedFrames.size) {
+    return payload.map((item) => {
+      item.visible = false
+      return item
     })
   }
+  let n = 0
+  closedFrames.reverse().forEach((frame) => {
+    payload.push(recentlyClosedTemplate(n, frame))
+    n = n + 1
+    if (n >= config.menu.maxClosedFrames) {
+      return false
+    }
+  })
   return payload
+}
+
+/**
+ * Update display of History menu "Recently closed" menu items by
+ * inserting MenuItems or hiding existing MenuItems.
+ * @param {electron.Menu} appMenu
+ * @param {Immutable.OrderedMap} closedFrames
+ */
+module.exports.updateRecentlyClosedMenuItems = (appMenu, closedFrames) => {
+  const headingVisible = closedFrames.size > 0
+  const maxMenuItems = config.menu.maxClosedFrames
+  const historyLabel = locale.translation('history')
+  const historyMenu = module.exports.getMenuItem(appMenu, historyLabel).submenu
+  let insertPosition = 0
+
+  const historyMenuIndicesByOrder = {}
+  for (let i = 0; i < historyMenu.items.length; i++) {
+    const item = historyMenu.items[i]
+    // New items go after "Recently closed"
+    if (!insertPosition && item.id === 'recentlyClosedHeading') {
+      insertPosition = i + 1
+      item.visible = headingVisible
+      continue
+    } else if (item.id === 'recentlyClosedSeparator') {
+      item.visible = headingVisible
+      continue
+    }
+
+    // Find existing items
+    const key = getRecentlyClosedMenuKey(item.id)
+    if (typeof key !== 'string') {
+      continue
+    }
+    // Undo close tab removes closed frames.
+    if (!closedFrames.get(key)) {
+      item.visible = false
+      continue
+    }
+    historyMenuIndicesByOrder[key] = i
+  }
+
+  let visibleItems = 0
+  closedFrames.reverse().forEach((frame, url) => {
+    const menuIndex = historyMenuIndicesByOrder[url]
+    if (visibleItems >= maxMenuItems) {
+      if (menuIndex) {
+        historyMenu.items[menuIndex].visible = false
+      }
+      return
+    }
+    if (menuIndex) {
+      historyMenu.items[menuIndex].visible = true
+      visibleItems += 1
+    } else {
+      const template = recentlyClosedTemplate(url, frame)
+      const item = new MenuItem(template)
+      // XXX: Can't set this with MenuItem constructor
+      item.id = template.id
+      historyMenu.insert(insertPosition, item)
+      visibleItems += 1
+      insertPosition = insertPosition + 1
+    }
+  })
+  return appMenu
 }
 
 const isItemValid = (currentItem, previousItem) => {
@@ -151,33 +278,75 @@ const isItemValid = (currentItem, previousItem) => {
       return false
     }
   }
-  return currentItem && (typeof currentItem.label === 'string' || typeof currentItem.type === 'string')
+
+  return currentItem && (typeof currentItem.l10nLabelId === 'string' || typeof currentItem.label === 'string' ||
+    currentItem.type === 'separator' || typeof currentItem.slice === 'function' || typeof currentItem.labelDataBind === 'string')
+}
+
+const sanitizeTemplateItems = (template) => {
+  const reduced = template.reduce((result, currentValue, currentIndex, array) => {
+    const previousItem = result.length > 0
+      ? result[result.length - 1]
+      : undefined
+    if (currentValue && currentValue.submenu) {
+      currentValue.submenu = sanitizeTemplateItems(currentValue.submenu)
+    }
+    if (isItemValid(currentValue, previousItem)) {
+      result.push(currentValue)
+    }
+    return result
+  }, [])
+
+  const result = Array.isArray(reduced)
+    ? reduced
+    : [reduced]
+
+  if (result.length > 0 && result[0] === CommonMenu.separatorMenuItem) {
+    result.shift()
+  }
+
+  if (result.length > 0 && result[result.length - 1] === CommonMenu.separatorMenuItem) {
+    result.pop()
+  }
+
+  return result
 }
 
 /**
  * Remove invalid entries from a menu template:
  * - null or falsey entries
  * - extra menu separators
- * - entries which don't have a label or type
+ * - entries which don't have a label (or l10nLabelId) if their type is not 'separator'
  */
-module.exports.sanitizeTemplateItems = (template) => {
-  const result = template.reduce((previousValue, currentValue, currentIndex, array) => {
-    const result = currentIndex === 1 ? [] : previousValue
-    if (currentIndex === 1) {
-      if (isItemValid(previousValue)) {
-        result.push(previousValue)
-      }
-    }
-    const previousItem = result.length > 0
-      ? result[result.length - 1]
-      : undefined
-    if (isItemValid(currentValue, previousItem)) {
-      result.push(currentValue)
-    }
-    return result
-  })
+module.exports.sanitizeTemplateItems = sanitizeTemplateItems
 
-  return Array.isArray(result)
-    ? result
-    : [result]
+const bindClickHandler = (contextMenu, lastFocusedSelector) => {
+  if (contextMenu.type === separatorMenuItem.type) {
+    return contextMenu
+  }
+  contextMenu.click = function (e) {
+    e.preventDefault()
+    if (lastFocusedSelector) {
+      // Send focus back to the active web frame
+      const results = document.querySelectorAll(lastFocusedSelector)
+      if (results.length === 1) results[0].focus()
+    }
+    windowActions.clickMenubarSubmenu(contextMenu.label)
+  }
+  if (contextMenu.submenu) {
+    contextMenu.submenu = contextMenu.submenu.map((submenuItem) => {
+      return bindClickHandler(submenuItem, lastFocusedSelector)
+    })
+  }
+  return contextMenu
+}
+
+module.exports.showContextMenu = (rect, submenu, lastFocusedSelector) => {
+  windowActions.setContextMenuDetail(makeImmutable({
+    left: rect.left,
+    top: rect.bottom,
+    template: submenu.map((submenuItem) => {
+      return bindClickHandler(submenuItem, lastFocusedSelector)
+    })
+  }))
 }

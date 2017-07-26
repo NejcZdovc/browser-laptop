@@ -4,41 +4,38 @@
 
 'use strict'
 
-const URL = require('url')
-const ABPFilterParserLib = require('abp-filter-parser-cpp')
-const ABPFilterParser = ABPFilterParserLib.ABPFilterParser
-const FilterOptions = ABPFilterParserLib.FilterOptions
-const DataFile = require('./dataFile')
+const urlParse = require('./common/urlParse')
+const {adBlockDataFileVersion, AdBlockClient} = require('ad-block')
+const dataFile = require('./dataFile')
 const Filtering = require('./filtering')
 const appConfig = require('../js/constants/appConfig')
 const debounce = require('../js/lib/debounce')
 // Maintains a map between a resource uuid and an adblock instance
 const adblockInstances = new Map()
-const defaultAdblock = new ABPFilterParser()
-const defaultSafeBrowsing = new ABPFilterParser()
-const regions = require('abp-filter-parser-cpp/lib/regions')
+const defaultAdblock = new AdBlockClient()
+const defaultSafeBrowsing = new AdBlockClient()
+const regions = require('ad-block/lib/regions')
 const getSetting = require('../js/settings').getSetting
 const {ADBLOCK_CUSTOM_RULES} = require('../js/constants/settings')
 const customFilterRulesUUID = 'CE61F035-9F0A-4999-9A5A-D4E46AF676F7'
 const appActions = require('../js/actions/appActions')
+const {mapFilterType, shouldDoAdBlockCheck} = require('./browser/ads/adBlockUtil')
 
 module.exports.adBlockResourceName = 'adblock'
 module.exports.safeBrowsingResourceName = 'safeBrowsing'
 
-let mapFilterType = {
-  mainFrame: FilterOptions.document,
-  subFrame: FilterOptions.subdocument,
-  stylesheet: FilterOptions.stylesheet,
-  script: FilterOptions.script,
-  image: FilterOptions.image,
-  object: FilterOptions.object,
-  xhr: FilterOptions.xmlHttpRequest,
-  other: FilterOptions.other
-}
-
-const whitelistHosts = ['disqus.com', 'a.disquscdn.com']
-
+/**
+ * Starts ad blocking
+ * @param adblock {AdBlockClient} - The ad block client to start
+ * @param resourceName {string} - The resource name e.g. adblock, safeBrowsing
+ * @param shouldCheckMainFrame {boolean} - True if main frame URLs should be checked.
+ *   for example safe browsing checks main frame URLs but ad block checks do not.
+ */
 const startAdBlocking = (adblock, resourceName, shouldCheckMainFrame) => {
+  if (resourceName === module.exports.safeBrowsingResourceName) {
+    // Needed for #9056
+    module.exports.safeBrowsingInstance = adblock
+  }
   Filtering.registerBeforeRequestFilteringCB((details) => {
     const mainFrameUrl = Filtering.getMainFrameUrl(details)
     // this can happen if the tab is closed and the webContents is no longer available
@@ -47,16 +44,9 @@ const startAdBlocking = (adblock, resourceName, shouldCheckMainFrame) => {
         resourceName: module.exports.resourceName
       }
     }
-    const firstPartyUrl = URL.parse(mainFrameUrl)
-    let firstPartyUrlHost = firstPartyUrl.hostname || ''
-    const urlHost = URL.parse(details.url).hostname
-    const cancel = firstPartyUrl.protocol &&
-      (shouldCheckMainFrame || (details.resourceType !== 'mainFrame' &&
-                                Filtering.isThirdPartyHost(firstPartyUrlHost, urlHost))) &&
-      firstPartyUrl.protocol.startsWith('http') &&
-      mapFilterType[details.resourceType] !== undefined &&
-      !whitelistHosts.includes(urlHost) &&
-      !urlHost.endsWith('.disqus.com') &&
+    const firstPartyUrl = urlParse(mainFrameUrl)
+    const url = urlParse(details.url)
+    const cancel = shouldDoAdBlockCheck(details.resourceType, firstPartyUrl, url, shouldCheckMainFrame) &&
       adblock.matches(details.url, mapFilterType[details.resourceType], firstPartyUrl.host)
 
     return {
@@ -66,9 +56,9 @@ const startAdBlocking = (adblock, resourceName, shouldCheckMainFrame) => {
   })
 }
 
-module.exports.initInstance = (parser, resourceName, shouldCheckMainFrame) => {
-  DataFile.init(resourceName, startAdBlocking.bind(null, parser, resourceName, shouldCheckMainFrame),
-                (data) => parser.deserialize(data))
+module.exports.initInstance = (adBlockClient, resourceName, shouldCheckMainFrame) => {
+  dataFile.init(resourceName, adBlockDataFileVersion, startAdBlocking.bind(null, adBlockClient, resourceName, shouldCheckMainFrame),
+                (data) => adBlockClient.deserialize(data))
   return module.exports
 }
 
@@ -101,32 +91,32 @@ const registerAppConfigForResource = (uuid, enabled, version) => {
  * @param uuid - The uuid of the adblock datafile resource
  * @param forAdblock - true if main frame URLs should be blocked
  */
-module.exports.updateAdblockDataFiles = (uuid, enabled, version = 2, shouldCheckMainFrame = false) => {
+module.exports.updateAdblockDataFiles = (uuid, enabled, version = adBlockDataFileVersion, shouldCheckMainFrame = false) => {
   registerAppConfigForResource(uuid, enabled, version)
   if (!adblockInstances.has(uuid)) {
-    const parser = new ABPFilterParser()
-    adblockInstances.set(uuid, parser)
-    module.exports.initInstance(parser, uuid, shouldCheckMainFrame)
+    const adBlockClient = new AdBlockClient()
+    adblockInstances.set(uuid, adBlockClient)
+    module.exports.initInstance(adBlockClient, uuid, shouldCheckMainFrame)
   }
 }
 
 module.exports.updateAdblockCustomRules = debounce((rules) => {
-  let parser
+  let adBlockClient
   registerAppConfigForResource(customFilterRulesUUID, true, 1)
   if (!adblockInstances.has(customFilterRulesUUID)) {
-    parser = new ABPFilterParser()
+    adBlockClient = new AdBlockClient()
   } else {
-    parser = adblockInstances.get(customFilterRulesUUID)
+    adBlockClient = adblockInstances.get(customFilterRulesUUID)
   }
-  parser.clear()
-  parser.parse(rules)
+  adBlockClient.clear()
+  adBlockClient.parse(rules)
 
   if (!adblockInstances.has(customFilterRulesUUID)) {
-    adblockInstances.set(customFilterRulesUUID, parser)
+    adblockInstances.set(customFilterRulesUUID, adBlockClient)
     // This is just to stay consistent with other adblock resources
     // which use data files.  Tests will check for this to make sure
     // the resource loaded correctly.
     appActions.setResourceETag(customFilterRulesUUID, '.')
-    startAdBlocking(parser, customFilterRulesUUID, false)
+    startAdBlocking(adBlockClient, customFilterRulesUUID, false)
   }
 }, 1500)

@@ -38,6 +38,7 @@ var rendererIdentifiers = function () {
     'saveLinkAs',
     'allowFlashOnce',
     'allowFlashAlways',
+    'openFlashPreferences',
     'openInNewWindow',
     'openInNewSessionTab',
     'openInNewSessionTabs',
@@ -75,6 +76,7 @@ var rendererIdentifiers = function () {
     'closeOtherTabs',
     'closeTabsToRight',
     'closeTabsToLeft',
+    'closeTabPage',
     'bookmarkPage',
     'bookmarkLink',
     'openFile',
@@ -83,7 +85,6 @@ var rendererIdentifiers = function () {
     'importFrom',
     'closeWindow',
     'savePageAs',
-    'spreadTheWord',
     'share',
     'undo',
     'redo',
@@ -110,6 +111,7 @@ var rendererIdentifiers = function () {
     'cleanReload',
     'reload',
     'clone',
+    'detach',
     'readingView',
     'tabManager',
     'textEncoding',
@@ -151,6 +153,14 @@ var rendererIdentifiers = function () {
     'newWindow',
     'reopenLastClosedTab',
     'print',
+    'emailPageLink',
+    'tweetPageLink',
+    'facebookPageLink',
+    'pinterestPageLink',
+    'googlePlusPageLink',
+    'linkedInPageLink',
+    'bufferPageLink',
+    'redditPageLink',
     'findOnPage',
     'find',
     'checkForUpdates',
@@ -158,7 +168,7 @@ var rendererIdentifiers = function () {
     'settings',
     'bookmarksManager',
     'importBrowserData',
-    'reportAnIssue',
+    'exportBookmarks',
     'submitFeedback',
     'bookmarksToolbar',
     'bravery',
@@ -168,9 +178,10 @@ var rendererIdentifiers = function () {
     'braveryStartUsingPayments',
     'blockPopups',
     'learnSpelling',
-    'ignoreSpelling',
+    'forgetLearnedSpelling',
     'lookupSelection',
     // Other identifiers
+    'aboutBlankTitle',
     'urlCopied',
     'autoHideMenuBar',
     'unexpectedErrorWindowReload',
@@ -204,18 +215,22 @@ var rendererIdentifiers = function () {
     'updateLater',
     'updateHello',
     'notificationPasswordWithUserName',
+    'notificationUpdatePasswordWithUserName',
+    'notificationUpdatePassword',
     'notificationPassword',
     'notificationPasswordSettings',
     'notificationPaymentDone',
     'notificationTryPayments',
     'notificationTryPaymentsYes',
     'prefsRestart',
+    'areYouSure',
     'dismiss',
     'yes',
     'no',
     'noThanks',
     'neverForThisSite',
     'passwordsManager',
+    'extensionsManager',
     'downloadItemPause',
     'downloadItemResume',
     'downloadItemCancel',
@@ -226,6 +241,7 @@ var rendererIdentifiers = function () {
     'downloadItemClear',
     'downloadToolbarHide',
     'downloadItemClearCompleted',
+    'torrentDesc',
     // Caption buttons in titlebar (min/max/close - Windows only)
     'windowCaptionButtonMinimize',
     'windowCaptionButtonMaximize',
@@ -235,7 +251,11 @@ var rendererIdentifiers = function () {
     'importSuccess',
     'licenseTextOk',
     'closeFirefoxWarningOk',
-    'importSuccessOk'
+    'importSuccessOk',
+    'connectionError',
+    'unknownError',
+    'allowAutoplay',
+    'autoplayMedia'
   ]
 }
 
@@ -353,10 +373,12 @@ exports.init = function (language) {
   const propertyFiles = []
   const appendLangProperties = function (lang) {
     // Property files to parse (only ones containing menu specific identifiers)
-    propertyFiles.push(path.join(__dirname, 'extensions', 'brave', 'locales', lang, 'menu.properties'),
+    propertyFiles.push(
+      path.join(__dirname, 'extensions', 'brave', 'locales', lang, 'menu.properties'),
       path.join(__dirname, 'extensions', 'brave', 'locales', lang, 'app.properties'),
       path.join(__dirname, 'extensions', 'brave', 'locales', lang, 'error.properties'),
-      path.join(__dirname, 'extensions', 'brave', 'locales', lang, 'passwords.properties'))
+      path.join(__dirname, 'extensions', 'brave', 'locales', lang, 'passwords.properties'),
+      path.join(__dirname, 'extensions', 'brave', 'locales', lang, 'common.properties'))
   }
 
   appendLangProperties(lang)

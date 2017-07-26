@@ -42,58 +42,115 @@ describe('urlutil', function () {
   })
 
   describe('isNotURL', function () {
-    it('returns true when input is null', function () {
-      assert.equal(UrlUtil.isNotURL(null), true)
-    })
-    it('returns true when input is undefined', function () {
-      assert.equal(UrlUtil.isNotURL(), true)
-    })
-    it('returns false when input is "localhost"', function () {
-      assert.equal(UrlUtil.isNotURL('localhost'), false)
-    })
-    it('returns true when input is a quoted string', function () {
-      assert.equal(UrlUtil.isNotURL('"brave.com"'), true)
-    })
-    it('returns true when input is a pure string (no TLD)', function () {
-      assert.equal(UrlUtil.isNotURL('brave'), true)
-    })
-    it('returns false when input is a string with whitespace but has schema', function () {
-      assert.equal(UrlUtil.isNotURL('https://wwww.brave.com/test space.jpg'), false)
-    })
-    it('returns true when input is a string with schema but invalid domain name', function () {
-      assert.equal(UrlUtil.isNotURL('https://www.bra ve.com/test space.jpg'), true)
-    })
-    it('returns true when input contains more than one word', function () {
-      assert.equal(UrlUtil.isNotURL('brave is cool'), true)
-    })
-    it('returns false when input has custom protocol', function () {
-      assert.equal(UrlUtil.isNotURL('brave://test'), false)
-    })
-    it('returns true when input has space in schema', function () {
-      assert.equal(UrlUtil.isNotURL('https ://brave.com'), true)
-    })
-    it('returns false when input is chrome-extension', function () {
-      assert.equal(UrlUtil.isNotURL('chrome-extension://fmfcbgogabcbclcofgocippekhfcmgfj/cast_sender.js'), false)
-    })
-    it('returns false when input is mailto', function () {
-      assert.equal(UrlUtil.isNotURL('mailto:brian@brave.com'), false)
-    })
-    describe('search query', function () {
-      it('returns true when input starts with ?', function () {
-        assert.equal(UrlUtil.isNotURL('?brave'), true)
+    describe('returns false when input:', function () {
+      it('is a valid URL', function () {
+        assert.equal(UrlUtil.isNotURL('brave.com'), false)
       })
-      it('returns true when input has a question mark followed by a space', function () {
-        assert.equal(UrlUtil.isNotURL('? brave'), true)
+      it('is an absolute file path without scheme', function () {
+        assert.equal(UrlUtil.isNotURL('/file/path/to/file'), false)
       })
-      it('returns true when input starts with .', function () {
-        assert.equal(UrlUtil.isNotURL('.brave'), true)
+      it('is an absolute file path with scheme', function () {
+        assert.equal(UrlUtil.isNotURL('file:///file/path/to/file'), false)
       })
-      it('returns true when input end with .', function () {
-        assert.equal(UrlUtil.isNotURL('brave.'), true)
+      describe('for special pages', function () {
+        it('is a data URI', function () {
+          assert.equal(UrlUtil.isNotURL('data:text/html,hi'), false)
+        })
+        it('is a view source URL', function () {
+          assert.equal(UrlUtil.isNotURL('view-source://url-here'), false)
+        })
+        it('is a mailto link', function () {
+          assert.equal(UrlUtil.isNotURL('mailto:brian@brave.com'), false)
+        })
+        it('is an about page', function () {
+          assert.equal(UrlUtil.isNotURL('about:preferences'), false)
+        })
+        it('is a chrome-extension page', function () {
+          assert.equal(UrlUtil.isNotURL('chrome-extension://fmfcbgogabcbclcofgocippekhfcmgfj/cast_sender.js'), false)
+        })
+        it('is a magnet URL', function () {
+          assert.equal(UrlUtil.isNotURL('chrome://gpu'), false)
+        })
+        it('is a chrome page', function () {
+          assert.equal(UrlUtil.isNotURL('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C'), false)
+        })
+      })
+      it('contains a hostname and port number', function () {
+        assert.equal(UrlUtil.isNotURL('someBraveServer:8089'), false)
+      })
+      it('starts or ends with whitespace', function () {
+        assert.equal(UrlUtil.isNotURL('  http://brave.com  '), false)
+        assert.equal(UrlUtil.isNotURL('\n\nhttp://brave.com\n\n'), false)
+        assert.equal(UrlUtil.isNotURL('\t\thttp://brave.com\t\t'), false)
+      })
+      it('is a URL which contains basic auth user/pass', function () {
+        assert.equal(UrlUtil.isNotURL('http://username:password@example.com'), false)
+      })
+      it('is localhost (case-insensitive)', function () {
+        assert.equal(UrlUtil.isNotURL('LoCaLhOsT'), false)
+      })
+      it('is a hostname (not a domain)', function () {
+        assert.equal(UrlUtil.isNotURL('http://computer001/phpMyAdmin'), false)
+      })
+      it('ends with period (input contains a forward slash and domain)', function () {
+        assert.equal(UrlUtil.isNotURL('brave.com/test/cc?_ri_=3vv-8-e.'), false)
+      })
+      it('is a string with whitespace but has schema', function () {
+        assert.equal(UrlUtil.isNotURL('https://wwww.brave.com/test space.jpg'), false)
+      })
+      it('has custom protocol', function () {
+        assert.equal(UrlUtil.isNotURL('brave://test'), false)
       })
     })
-    it('returns false when input is a valid URL', function () {
-      assert.equal(UrlUtil.isNotURL('brave.com'), false)
+
+    describe('returns true when input:', function () {
+      it('is null or undefined', function () {
+        assert.equal(UrlUtil.isNotURL(), true)
+        assert.equal(UrlUtil.isNotURL(null), true)
+      })
+      it('is not a string', function () {
+        assert.equal(UrlUtil.isNotURL(false), true)
+        assert.equal(UrlUtil.isNotURL(333.449), true)
+      })
+      it('is a quoted string', function () {
+        assert.equal(UrlUtil.isNotURL('"search term here"'), true)
+      })
+      it('is a pure string (no TLD)', function () {
+        assert.equal(UrlUtil.isNotURL('brave'), true)
+      })
+      describe('search query', function () {
+        it('starts with ?', function () {
+          assert.equal(UrlUtil.isNotURL('?brave'), true)
+        })
+        it('has a question mark followed by a space', function () {
+          assert.equal(UrlUtil.isNotURL('? brave'), true)
+        })
+        it('starts with .', function () {
+          assert.equal(UrlUtil.isNotURL('.brave'), true)
+        })
+        it('ends with . (input does NOT contain a forward slash)', function () {
+          assert.equal(UrlUtil.isNotURL('brave.'), true)
+        })
+        it('ends with period (input contains only a forward slash)', function () {
+          assert.equal(UrlUtil.isNotURL('brave/com/test/cc?_ri_=3vv-8-e.'), true)
+        })
+      })
+      it('is a string with schema but invalid domain name', function () {
+        assert.equal(UrlUtil.isNotURL('https://www.bra ve.com/test space.jpg'), true)
+      })
+      it('contains more than one word', function () {
+        assert.equal(UrlUtil.isNotURL('brave is cool'), true)
+      })
+      it('is not an about page / view source / data URI / mailto / etc', function () {
+        assert.equal(UrlUtil.isNotURL('not-a-chrome-extension:'), true)
+        assert.equal(UrlUtil.isNotURL('mailtoo:'), true)
+      })
+      it('is a URL (without protocol) which contains basic auth user/pass', function () {
+        assert.equal(UrlUtil.isNotURL('username:password@example.com'), true)
+      })
+      it('has space in schema', function () {
+        assert.equal(UrlUtil.isNotURL('https ://brave.com'), true)
+      })
     })
   })
 
@@ -110,20 +167,10 @@ describe('urlutil', function () {
   })
 
   describe('isURL', function () {
-    it('absolute file path without scheme', function () {
-      assert.equal(UrlUtil.isURL('/file/path/to/file'), true)
-    })
-    it('absolute file path with scheme', function () {
-      assert.equal(UrlUtil.isURL('file:///file/path/to/file'), true)
-    })
-    it('detects data URI', function () {
-      assert.equal(UrlUtil.isURL('data:text/html,hi'), true)
-    })
-    it('someBraveServer:8089', function () {
-      assert.equal(UrlUtil.isURL('someBraveServer:8089'), true)
-    })
-    it('localhost', function () {
-      assert.equal(UrlUtil.isURL('localhost:8089'), true)
+    it('returns !isNotURL', function () {
+      assert.equal(UrlUtil.isURL('brave.com'), !UrlUtil.isNotURL('brave.com'))
+      assert.equal(UrlUtil.isURL('brave is cool'), !UrlUtil.isNotURL('brave is cool'))
+      assert.equal(UrlUtil.isURL('mailto:brian@brave.com'), !UrlUtil.isNotURL('mailto:brian@brave.com'))
     })
   })
 
@@ -142,6 +189,22 @@ describe('urlutil', function () {
     })
     it('invalid URL', function () {
       assert.equal(UrlUtil.isFileType('foo', 'jpg'), false)
+    })
+  })
+
+  describe('toPDFJSLocation', function () {
+    const baseUrl = 'chrome-extension://jdbefljfgobbmcidnmpjamcbhnbphjnb/'
+    it('pdf', function () {
+      assert.equal(UrlUtil.toPDFJSLocation('http://abc.com/test.pdf'), baseUrl + 'http://abc.com/test.pdf')
+    })
+    it('non-pdf', function () {
+      assert.equal(UrlUtil.toPDFJSLocation('http://abc.com/test.pdf.txt'), 'http://abc.com/test.pdf.txt')
+    })
+    it('file url', function () {
+      assert.equal(UrlUtil.toPDFJSLocation('file://abc.com/test.pdf.txt'), 'file://abc.com/test.pdf.txt')
+    })
+    it('empty', function () {
+      assert.equal(UrlUtil.toPDFJSLocation(''), '')
     })
   })
 
@@ -165,52 +228,17 @@ describe('urlutil', function () {
     })
     it('gets subdomain hostname patterns', function () {
       assert.deepEqual(UrlUtil.getHostnamePatterns('https://bar.brave.com'),
-                       ['bar.brave.com',
-                        '*.brave.com',
-                        'bar.*.com',
-                        'bar.brave.*'])
+        ['bar.brave.com',
+          '*.brave.com',
+          'bar.*.com',
+          'bar.brave.*'])
       assert.deepEqual(UrlUtil.getHostnamePatterns('https://foo.bar.brave.com'),
-                       ['foo.bar.brave.com',
-                        '*.bar.brave.com',
-                        'foo.*.brave.com',
-                        'foo.bar.*.com',
-                        'foo.bar.brave.*',
-                        '*.brave.com'])
-    })
-  })
-
-  describe('isFlashInstallUrl', function () {
-    it('gets English flash install', function () {
-      assert(UrlUtil.isFlashInstallUrl('https://get.adobe.com/flashplayer'))
-      assert(UrlUtil.isFlashInstallUrl('https://www.adobe.com/go/getflash/'))
-      assert(UrlUtil.isFlashInstallUrl('http://www.macromedia.com/go/GETFLASH'))
-    })
-    it('gets non-English flash install', function () {
-      assert(UrlUtil.isFlashInstallUrl('https://get.adobe.com/jp/flashplayer#test'))
-      assert(UrlUtil.isFlashInstallUrl('https://get.adobe.com/en/us/flashplayer/etc'))
-      assert(UrlUtil.isFlashInstallUrl('https://get.adobe.com/en-US/flashplayer/etc'))
-    })
-    it('returns false for non-flash url', function () {
-      assert(!UrlUtil.isFlashInstallUrl('https://gettadobe.com/jp/flashplayer'))
-    })
-  })
-
-  describe('shouldInterceptFlash', function () {
-    it('intercepts flash', function () {
-      assert(UrlUtil.shouldInterceptFlash('http://adobe.com.abc/flashthing'))
-      assert(UrlUtil.shouldInterceptFlash('https://site.duckduckgo.com'))
-    })
-    it('does not intercept on search engine pages', function () {
-      assert(!UrlUtil.shouldInterceptFlash('https://www.google.com/#q=flash'))
-      assert(!UrlUtil.shouldInterceptFlash('https://www.google.jp/#q=flash'))
-      assert(!UrlUtil.shouldInterceptFlash('https://www.google.co.uk/#q=flash'))
-      assert(!UrlUtil.shouldInterceptFlash('https://duckduckgo.com/?q=flash+player&t=hd&ia=about'))
-      assert(!UrlUtil.shouldInterceptFlash('https://www.bing.com/search?q=flash&go=Submit&qs=n&form=QBLH'))
-      assert(!UrlUtil.shouldInterceptFlash('https://yandex.ru/search/?lr=21411&msid=1469118356.6242.22900.32200&text=flash%20player'))
-      assert(!UrlUtil.shouldInterceptFlash('https://search.yahoo.com/search;_ylt=AwrBT4at95BXs8sAdpdXNyoA;_ylc=X1MDMjc2NjY3OQRfcgMyBGZyA3lmcC1'))
-    })
-    it('does not intercept on adobe site', function () {
-      assert(!UrlUtil.shouldInterceptFlash('https://www.adobe.com/test'))
+        ['foo.bar.brave.com',
+          '*.bar.brave.com',
+          'foo.*.brave.com',
+          'foo.bar.*.com',
+          'foo.bar.brave.*',
+          '*.brave.com'])
     })
   })
 
@@ -219,25 +247,23 @@ describe('urlutil', function () {
       assert.equal(UrlUtil.getLocationIfPDF('chrome-extension://jdbefljfgobbmcidnmpjamcbhnbphjnb/https://www.blackhat.co…king-Kernel-Address-Space-Layout-Randomization-KASLR-With-Intel-TSX-wp.pdf'),
         'https://www.blackhat.co…king-Kernel-Address-Space-Layout-Randomization-KASLR-With-Intel-TSX-wp.pdf')
     })
+    it('gets location for PDF JS viewer URL', function () {
+      assert.equal(UrlUtil.getLocationIfPDF('chrome-extension://jdbefljfgobbmcidnmpjamcbhnbphjnb/content/web/viewer.html?file=http%3A%2F%2Funec.edu.az%2Fapplication%2Fuploads%2F2014%2F12%2Fpdf-sample.pdf'),
+        'http://unec.edu.az/application/uploads/2014/12/pdf-sample.pdf')
+    })
+    it('does not remove wayback machine url location for PDF JS URL', function () {
+      assert.equal(UrlUtil.getLocationIfPDF('chrome-extension://jdbefljfgobbmcidnmpjamcbhnbphjnb/https://web.archive.org/web/20160106152308/http://stlab.adobe.com/wiki/images/d/d3/Test.pdf'),
+        'https://web.archive.org/web/20160106152308/http://stlab.adobe.com/wiki/images/d/d3/Test.pdf')
+    })
     it('does not modify location for non-pdf URL', function () {
       assert.equal(UrlUtil.getLocationIfPDF('https://www.blackhat.co…king-Kernel-Address-Space-Layout-Randomization-KASLR-With-Intel-TSX-wp.pdf'),
         'https://www.blackhat.co…king-Kernel-Address-Space-Layout-Randomization-KASLR-With-Intel-TSX-wp.pdf')
       assert.equal(UrlUtil.getLocationIfPDF('chrome-extension://blank'), 'chrome-extension://blank')
       assert.equal(UrlUtil.getLocationIfPDF(null), null)
     })
-  })
-
-  describe('getDisplayLocation', function () {
-    it('gets display location for PDF JS URL', function () {
-      assert.equal(UrlUtil.getDisplayLocation('chrome-extension://jdbefljfgobbmcidnmpjamcbhnbphjnb/https://www.blackhat.co…king-Kernel-Address-Space-Layout-Randomization-KASLR-With-Intel-TSX-wp.pdf', true),
-        'https://www.blackhat.co…king-Kernel-Address-Space-Layout-Randomization-KASLR-With-Intel-TSX-wp.pdf')
-    })
-    it('does not modify display location for non-pdf URL', function () {
-      assert.equal(UrlUtil.getDisplayLocation('http://example.com', true),
-        'http://example.com')
-    })
-    it('shows blank for about:newtab', function () {
-      assert.equal(UrlUtil.getDisplayLocation('about:newtab'), '')
+    it('gets location for file: PDF URL', function () {
+      let url = 'chrome-extension://jdbefljfgobbmcidnmpjamcbhnbphjnb/file:///Users/yan/Downloads/test.pdf'
+      assert.equal(UrlUtil.getLocationIfPDF(url), 'file:///Users/yan/Downloads/test.pdf')
     })
   })
 
@@ -250,6 +276,66 @@ describe('urlutil', function () {
     })
     it('includes the port in the response when given a valid URL with a port number', function () {
       assert.equal(UrlUtil.getDefaultFaviconUrl('https://brave.com:8080'), 'https://brave.com:8080/favicon.ico')
+    })
+  })
+
+  describe('getPunycodeUrl', function () {
+    it('returns empty string if input is not a URL', function () {
+      assert.equal(UrlUtil.getPunycodeUrl('invalid-url-goes-here'), 'invalid-url-goes-here')
+    })
+    it('returns the punycode URL when given a valid URL', function () {
+      assert.equal(UrlUtil.getPunycodeUrl('http://brave:brave@ebаy.com:1234/brave#brave'), 'http://brave:brave@xn--eby-7cd.com:1234/brave#brave')
+    })
+  })
+
+  describe('isPotentialPhishingUrl', function () {
+    it('returns false if input is not a URL', function () {
+      assert.equal(UrlUtil.isPotentialPhishingUrl(null), false)
+    })
+    it('returns false if input is a regular URL', function () {
+      assert.equal(UrlUtil.isPotentialPhishingUrl(' https://google.com'), false)
+    })
+    it('returns true if input is a data URL', function () {
+      assert.equal(UrlUtil.isPotentialPhishingUrl('data:text/html,<script>alert("no crash")</script>'), true)
+    })
+    it('returns true if input is a blob URL', function () {
+      assert.equal(UrlUtil.isPotentialPhishingUrl('   BLOB:foo '), true)
+    })
+  })
+
+  describe('isFileScheme', function () {
+    describe('returns true when input:', function () {
+      it('is an absolute file path with scheme', function () {
+        assert.equal(UrlUtil.isFileScheme('file:///file/path/to/file'), true)
+      })
+    })
+    describe('returns false when input:', function () {
+      it('is an absolute file path without scheme', function () {
+        assert.equal(UrlUtil.isFileScheme('/file/path/to/file'), false)
+      })
+      it('is a URL', function () {
+        assert.equal(UrlUtil.isFileScheme('http://brave.com'), false)
+      })
+      it('has custom protocol', function () {
+        assert.equal(UrlUtil.isFileScheme('brave://test'), false)
+      })
+    })
+  })
+
+  describe('getDisplayHost', function () {
+    it('url is http', function () {
+      const result = UrlUtil.getDisplayHost('http://brave.com')
+      assert.equal(result, 'brave.com')
+    })
+
+    it('url is https', function () {
+      const result = UrlUtil.getDisplayHost('https://brave.com')
+      assert.equal(result, 'brave.com')
+    })
+
+    it('url is file', function () {
+      const result = UrlUtil.getDisplayHost('file://brave.text')
+      assert.equal(result, 'file://brave.text')
     })
   })
 })

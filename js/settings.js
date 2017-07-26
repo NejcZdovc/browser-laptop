@@ -18,6 +18,12 @@ const passwordManagerDefault = (settingKey, settingsCollection) => {
   const lastPassEnabled = resolveValue(settings.LAST_PASS_ENABLED, settingsCollection) === true
   if (lastPassEnabled) return passwordManagers.LAST_PASS
 
+  const enpassEnabled = resolveValue(settings.ENPASS_ENABLED, settingsCollection) === true
+  if (enpassEnabled) return passwordManagers.ENPASS
+
+  const bitwardenEnabled = resolveValue(settings.BITWARDEN_ENABLED, settingsCollection) === true
+  if (bitwardenEnabled) return passwordManagers.BITWARDEN
+
   const disabled = resolveValue(settings.PASSWORD_MANAGER_ENABLED, settingsCollection) === false
   if (disabled) return passwordManagers.UNMANAGED
 
@@ -46,14 +52,16 @@ const getDefaultSetting = (settingKey, settingsCollection) => {
 }
 
 const resolveValue = (settingKey, settingsCollection) => {
-  const appSettings = (process.type === 'browser'
-      ? require('./stores/appStore').getState().get('settings')
-      : require('./stores/appStoreRenderer').state.get('settings')) || Immutable.Map()
-  if (settingsCollection && settingsCollection.constructor === Immutable.Map) {
-    return settingsCollection.get(settingKey) !== undefined ? settingsCollection.get(settingKey) : appConfig.defaultSettings[settingKey]
+  const appStore = (process.type === 'browser'
+      ? require('./stores/appStore').getState()
+      : require('./stores/appStoreRenderer').state) || Immutable.Map()
+  const appSettings = appStore.get('settings') || Immutable.Map()
+  if (settingsCollection && settingsCollection.constructor === Immutable.Map &&
+    settingsCollection.get(settingKey) !== undefined) {
+    return settingsCollection.get(settingKey)
   }
-  if (settingsCollection) {
-    return settingsCollection[settingKey] !== undefined ? settingsCollection[settingKey] : appConfig.defaultSettings[settingKey]
+  if (settingsCollection && settingsCollection[settingKey] !== undefined) {
+    return settingsCollection[settingKey]
   }
   return appSettings.get(settingKey) !== undefined ? appSettings.get(settingKey) : appConfig.defaultSettings[settingKey]
 }

@@ -5,6 +5,7 @@
 'use strict'
 
 const electron = require('electron')
+const config = require('../js/constants/config')
 const BrowserWindow = electron.BrowserWindow
 
 const renderUrlToPdf = (appState, action, testingMode) => {
@@ -31,7 +32,7 @@ const renderUrlToPdf = (appState, action, testingMode) => {
       let listeners = wv.session.listeners('will-download')
       wv.session.removeAllListeners('will-download')
 
-      wv.downloadURL(pdfDataURI)
+      wv.downloadURL(pdfDataURI, true)
       wv.session.once('will-download', function (event, item) {
         if (savePath) {
           item.setSavePath(savePath)
@@ -62,7 +63,7 @@ const renderUrlToPdf = (appState, action, testingMode) => {
 
   let afterLoaded = () => {
     let removeCharEncodingArtifactJS = 'document.body.outerHTML = document.body.outerHTML.replace(/Â/g, "")'
-    wv.executeJavaScript(removeCharEncodingArtifactJS, whenReadyToGeneratePDF)
+    wv.executeScriptInTab(config.braveExtensionId, removeCharEncodingArtifactJS, {}, whenReadyToGeneratePDF)
   }
 
   bw.loadURL(url)
@@ -74,4 +75,3 @@ const renderUrlToPdf = (appState, action, testingMode) => {
 module.exports = {
   renderUrlToPdf
 }
-

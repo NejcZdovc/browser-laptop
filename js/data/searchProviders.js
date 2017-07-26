@@ -80,7 +80,7 @@ module.exports = { "providers" :
       "shortcut" : ":y"
     },
     {
-      "name" : "Youtube",
+      "name" : "YouTube",
       "base" : "https://www.youtube.com",
       "image" : "https://www.youtube.com/favicon.ico",
       "search" : "https://www.youtube.com/results?search_type=search_videos&search_query={searchTerms}&search_sort=relevance&search_category=0&page=",
@@ -129,13 +129,23 @@ module.exports = { "providers" :
       "name" : "Yandex",
       "base" : "https://yandex.com",
       "image" : "https://www.yandex.com/favicon.ico",
-      "search" : "https://yandex.com/search/?text={searchTerms}&clid={platformClientId}",
-      "shortcut" : ":ya",
-      "platformClientId": {
-        "win32": 2274777,
-        "darwin": 2274776,
-        "linux": 2274778
-      }
+      "search" : "https://yandex.com/search/?text={searchTerms}&clid=2274777",
+      "shortcut" : ":ya"
+    },
+    {
+      "name" : "Ecosia",
+      "base" : "https://www.ecosia.org/",
+      "image" : "https://cdn.ecosia.org/assets/images/ico/favicon.ico",
+      "search" : "https://www.ecosia.org/search?q={searchTerms}",
+      "autocomplete": "https://ac.ecosia.org/autocomplete?q={searchTerms}&type=list",
+      "shortcut" : ":e"
+    },
+    {
+      "name" : "searx",
+      "base" : "https://searx.me",
+      "image" : "https://searx.me/favicon.ico",
+      "search" : "https://searx.me/?q={searchTerms}&categories=general",
+      "shortcut" : ":x"
     }
   ]
 }

@@ -3,7 +3,6 @@
 const electron = require('electron')
 const app = electron.app
 app.setName('brave')
-require('../../../app/browser/lib/patchUserDataDir')
 
 const path = require('path')
 const rimraf = require('../rimraf')
@@ -55,10 +54,10 @@ app.on('ready', () => {
       cleanUserData(process.argv[3])
       break
     case 'addSimulatedLedgerTransactions':
-      addSimulatedLedgerTransactions(process.argv[3])
+      addSimulatedLedgerTransactions(parseInt(process.argv[3]))
       break
     case 'addSimulatedSynopsisVisits':
-      addSimulatedSynopsisVisits(process.argv[3])
+      addSimulatedSynopsisVisits(parseInt(process.argv[3]))
       break
   }
 

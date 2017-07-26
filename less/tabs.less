@@ -4,28 +4,13 @@
 
 @import "variables.less";
 
-// Windows specific styles
-.platform--win32 {
-  .tab {
-    color: #555;
-
-    .tabTitle {
-      font-weight: 500;
-      font-size: 12px;
-      height: 18px;
-    }
-  }
-}
-
 .tabs {
   box-sizing: border-box;
-  background: none;
   display: flex;
   flex: 1;
   overflow: auto;
-  padding: 0 4px 0 0;
+  padding: 0;
   height: @tabsToolbarHeight;
-  margin-top: 2px;
   position: relative;
   white-space: nowrap;
   z-index: @zindexTabs;
@@ -53,14 +38,14 @@
 
   .newFrameButton {
     background: @buttonColor;
-    width: 15px;
-    height: 26px;
-    line-height: 24px;
+    min-width: 25px;
+    min-height: 26px;
+    line-height: 26px;
     -webkit-mask-image: url('../img/toolbar/newtab_btn.svg');
     -webkit-mask-repeat: no-repeat;
     -webkit-mask-position: center;
     -webkit-mask-size: 12px 12px;
-
+    -webkit-mask-origin: border;
     &:hover {
       opacity: 1.0;
       background-color: black;
@@ -68,142 +53,9 @@
   }
 }
 
-.tab {
-    background: linear-gradient(to bottom, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.1));
-  border-radius: @borderRadiusTabs @borderRadiusTabs 0px 0px;
-  border-width: 1px 1px 0;
-  box-sizing: border-box;
-  color: #3B3B3B;
-  display: flex;
-  height: 23px;
-  margin-top: 2px;
-  transition: transform 200ms ease;
-  left: 0;
-  opacity: 1.0;
-  padding: 0;
-  width: 100%;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(0, 0, 0, 0.0);
-  border-bottom: 1px;
-
-  .tabTitle {
-    -webkit-user-select: none;
-    box-sizing: border-box;
-    display: inline-block;
-    font-size: 12px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    line-height: 16px;
-    white-space: nowrap;
-    vertical-align: middle;
-    width: calc(~'100% - 40px');
-    height: 15px;
-  }
-  .tabIcon {
-    background-position: center;
-    background-repeat: no-repeat;
-    display: inline-block;
-    font-size: 12px;
-    text-align: center;
-    margin-left: 4px;
-    margin-right: 4px;
-  }
-
-  .privateIcon {
-    background-position: center;
-    background-repeat: no-repeat;
-    display: inline-block;
-    font-size: 14px;
-    margin: auto 0px auto 9px;
-    position: relative;
-    vertical-align: middle;
-  }
-
-
-  .audioPlaybackActive {
-    margin: auto 4px auto 0;
-    color: @audioColor;
-    width: 20px;
-  }
-
-  .thumbnail {
-    display: none;
-    position: absolute;
-    top: 32px;
-    left: 0;
-    border: 1px solid #000;
-    padding: 10px;
-    background: #fff;
-    pointer-events: none;
-    z-index: @zindexTabsThumbnail;
-  }
-
-  &.active {
-      background: linear-gradient(to bottom, white, @chromePrimary, );
-      height: 25px;
-      margin-top: 1px;
-      box-shadow: inset 1px 1px 2px 0px white;
-      box-shadow: 0px -1px 4px 0px rgba(51, 51, 51, 0.12);
-      border: 1px solid #bbb;
-      border-bottom: 1px;
-  }
-
-  &.private {
-    background: @privateTabBackground;
-    color: #fff;
-    &:not(.active) {
-      background: lighten(@privateTabBackground, 40%);
-    }
-  }
-
-  &:hover {
-    .closeTab {
-      opacity: 0.5;
-    }
-
-    .thumbnail {
-      display: block;
-    }
-  }
-
-  &:not(.active):hover {
-    background: linear-gradient(to bottom, rgba(255, 255, 255, 0.8), rgba(250, 250, 250, 0.4), );
-    &.private {
-      background: lighten(@privateTabBackground, 20%);
-    }
-  }
-
-  &.dragging {
-    &:hover {
-      .closeTab {
-        opacity: 0;
-      }
-    }
-  }
-
-  .closeTab {
-    opacity: 0;
-    text-align: center;
-    width: 16px;
-    height: 16px;
-    margin-left: 4px;
-    margin-right: 4px;
-
-    &:hover {
-      opacity: 1;
-    }
-
-    border: 0px solid white;
-    border-radius: 50%;
-    z-index: @zindexTabs;
-  }
-}
-
 .tabArea {
   box-sizing: border-box;
   display: inline-block;
-  padding: 0 4px 0 0;
   position: relative;
   vertical-align: top;
   overflow: hidden;
@@ -216,25 +68,26 @@
   &:not(.isPinned) {
     flex: 1;
     &:first-child {
-      padding-left: 6px;
+      //padding-left: 6px;
     }
   }
 
   &.isPinned {
-    &:last-child {
-      padding-right: 6px;
+    .tabIcon {
+      margin: 0;
+      padding: 0 4px;
     }
   }
 
   &.draggingOverLeft {
     &:not(.isDragging) {
-      margin-left: @dragSpacing;
+      padding-left: @dragSpacing;
     }
   }
 
   &.draggingOverRight {
     &:not(.isDragging) {
-      margin-right: @dragSpacing;
+      padding-right: @dragSpacing;
     }
   }
 
@@ -266,16 +119,19 @@
 }
 
 .tabsToolbar {
+  box-sizing: border-box;
   background: @tabsBackground;
   display: flex;
   height: @tabsToolbarHeight;
-//  margin-top: 2px;
-  -webkit-user-select: none;
+  border-top: 1px solid @tabsToolbarBorderColor;
+  user-select: none;
 }
 
 .tabsToolbarButtons {
-  background: @tabsBackground;
-  padding-right: 2px;
+  box-sizing: border-box;
+  height: @tabHeight;
+  padding-right: 5px;
+
   .browserButton {
     display: inline-block;
     line-height: 26px;
@@ -283,13 +139,14 @@
 }
 
 .tabPages {
-  background: @tabsBackground;
+  background: none;
   display: flex;
-  height: @tabPagesHeight;
   justify-content: center;
+  height: @tabPagesHeight;
+  padding: @tabPagesHeight 0 @navbarMenubarMargin 0;
   position: relative;
-  text-align: center;
   z-index: @zindexTabs;
+
   &.allowDragging {
     -webkit-app-region: drag;
     >* {
@@ -298,32 +155,30 @@
   }
 
   &.singlePage {
-    height: 1px;
+    margin: 0;
+    padding: 0;
   }
 
   >div {
     display: flex
-//    margin-top: 4px;
   }
 }
 
 .tabPage {
   align-items: center;
-  background-color: #aaaaaa;
+  background-color: #fff;
   border-radius: @borderRadius;
-  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.2);
+  border: 1px solid #bbb;
   box-sizing: border-box;
   display: inline-block;
   margin: auto 2.5px;
-  margin-top: 3px;
-  height: 6px;
-  width: 36px;
+  height: 7px;
+  width: 35px;
   vertical-align: middle;
 
   &:hover {
-    background-color: #f0f0f0;
-    border: 2px solid white;
-    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.0);
+    background-color: #fff;
+    border: 1px solid @braveOrange;
   }
 
   &.audioPlaybackActive {
@@ -331,52 +186,49 @@
   }
 
   &.active {
-    background-color: @chromePrimary;
-    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.0);
-
+    background-color: @braveOrange;
+    border-width: 0;
   }
 }
 
 .prevTab,
 .nextTab {
     display: none;
-    color: #a0a0a0;
+    color: @buttonColor;
     font-size: 21px !important;
-    height: 20px;
-    line-height: 19px !important;
+    height: 26px;
+    line-height: 26px !important;
     text-align: center;
     vertical-align: top;
-    margin-top: 4px;
-    margin-left: -5px;
-    margin-right: -5px;
-    width: 30px;
+    margin-top: 0;
+    margin-left: 0;
+    margin-right: 0;
+    width: 22px;
 
   &:not([disabled]) {
     display: block;
-    background: @tabsBackground;
 
     &:hover {
-  //    background: lighten(#eeeeee, 10%);
-            color: white;
+      color: black;
     }
   }
 }
 
 .prevTab {
-  background: linear-gradient(to right, @chromeControlsBackground2, @tabsBackground);
-  border-bottom-left-radius: 0;
-  border-top-left-radius: @borderRadius;
+  border-radius: 0;
+  border-right: 1px solid #bbb;
+  padding-right: 2px;
 }
 
 .nextTab {
-  background: linear-gradient(to left, #afb0b4, #cccccc);
-  border-bottom-right-radius: 0;
-  border-top-right-radius: @borderRadius;
+  border-radius: 0;
+  padding-left: 2px;
 }
 
 .pinnedTabs {
-  margin-left: 9px;
-  margin-top: 2px;
+  margin-left: 0;
+  margin-top: 0;
+  background: @tabsBackgroundInactive;
 }
 
 .segmentedControl {

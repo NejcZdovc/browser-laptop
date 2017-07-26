@@ -1,4 +1,5 @@
-/* global describe, it, beforeEach */
+/* global describe, it, beforeEach, before, after */
+const mockery = require('mockery')
 const settings = require('../../js/settings')
 const settingsConst = require('../../js/constants/settings')
 const {passwordManagers, extensionIds, displayNames} = require('../../js/constants/passwordManagers')
@@ -12,6 +13,18 @@ require('./braveUnit')
 describe('settings unit test', function () {
   let settingsCollection = null
 
+  before(function () {
+    mockery.enable({
+      warnOnReplace: false,
+      warnOnUnregistered: false,
+      useCleanCache: true
+    })
+  })
+
+  after(function () {
+    mockery.disable()
+  })
+
   beforeEach(function () {
     settingsCollection = {}
   })
@@ -23,9 +36,24 @@ describe('settings unit test', function () {
       assert.equal(response, 'testValue')
     })
 
-    it('returns default value from appConfig if not found', function () {
+    it('returns value from appConfig if both collection and appStore not found', function () {
       const response = settings.getSetting(settingsConst.TABS_PER_PAGE, settingsCollection)
       assert.equal(response, appConfig.defaultSettings[settingsConst.TABS_PER_PAGE])
+    })
+
+    it('returns value from appStore if collection not found', function () {
+      const nonDefaultValue = appConfig.defaultSettings[settingsConst.TABS_PER_PAGE] + 10
+      let settingsState = {}
+      settingsState[settingsConst.TABS_PER_PAGE] = nonDefaultValue
+      mockery.registerMock('./stores/appStoreRenderer', {
+        get state () {
+          return Immutable.fromJS({
+            settings: settingsState
+          })
+        }
+      })
+      const response = settings.getSetting(settingsConst.TABS_PER_PAGE, settingsCollection)
+      assert.equal(response, nonDefaultValue)
     })
 
     describe('when setting default value for new config entries (based on previous session data)', function () {
@@ -48,13 +76,25 @@ describe('settings unit test', function () {
           assert.equal(response, passwordManagers.LAST_PASS)
         })
 
+        it('returns `Enpass` if ENPASS_ENABLED was true', function () {
+          settingsCollection[settingsConst.ENPASS_ENABLED] = true
+          const response = settings.getSetting(settingsConst.ACTIVE_PASSWORD_MANAGER, settingsCollection)
+          assert.equal(response, passwordManagers.ENPASS)
+        })
+
+        it('returns `bitwarden` if BITWARDEN_ENABLED was true', function () {
+          settingsCollection[settingsConst.BITWARDEN_ENABLED] = true
+          const response = settings.getSetting(settingsConst.ACTIVE_PASSWORD_MANAGER, settingsCollection)
+          assert.equal(response, passwordManagers.BITWARDEN)
+        })
+
         it('returns `BuiltIn` if PASSWORD_MANAGER_ENABLED was true', function () {
           settingsCollection[settingsConst.PASSWORD_MANAGER_ENABLED] = true
           const response = settings.getSetting(settingsConst.ACTIVE_PASSWORD_MANAGER, settingsCollection)
           assert.equal(response, passwordManagers.BUILT_IN)
         })
 
-        it('returns `1Password`/`Dashlane`/`LastPass`, even if PASSWORD_MANAGER_ENABLED was true', function () {
+        it('returns `1Password`/`Dashlane`/`LastPass`/`Enpass`/`bitwarden`, even if PASSWORD_MANAGER_ENABLED was true', function () {
           // 1Password
           settingsCollection[settingsConst.ONE_PASSWORD_ENABLED] = true
           settingsCollection[settingsConst.PASSWORD_MANAGER_ENABLED] = true
@@ -72,6 +112,18 @@ describe('settings unit test', function () {
           settingsCollection[settingsConst.PASSWORD_MANAGER_ENABLED] = true
           response = settings.getSetting(settingsConst.ACTIVE_PASSWORD_MANAGER, settingsCollection)
           assert.equal(response, passwordManagers.LAST_PASS)
+          // Enpass
+          settingsCollection = {}
+          settingsCollection[settingsConst.ENPASS_ENABLED] = true
+          settingsCollection[settingsConst.PASSWORD_MANAGER_ENABLED] = true
+          response = settings.getSetting(settingsConst.ACTIVE_PASSWORD_MANAGER, settingsCollection)
+          assert.equal(response, passwordManagers.ENPASS)
+          // bitwarden
+          settingsCollection = {}
+          settingsCollection[settingsConst.BITWARDEN_ENABLED] = true
+          settingsCollection[settingsConst.PASSWORD_MANAGER_ENABLED] = true
+          response = settings.getSetting(settingsConst.ACTIVE_PASSWORD_MANAGER, settingsCollection)
+          assert.equal(response, passwordManagers.BITWARDEN)
         })
 
         it('returns `Unmanaged` if PASSWORD_MANAGER_ENABLED was false', function () {

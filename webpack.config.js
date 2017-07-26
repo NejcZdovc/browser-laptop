@@ -10,7 +10,7 @@ var env = process.env.NODE_ENV === 'production' ? 'production'
   : (process.env.NODE_ENV === 'test' ? 'test' : 'development')
 
 function config () {
-  return {
+  let c = {
     devtool: '#source-map',
     cache: true,
     module: {
@@ -20,17 +20,18 @@ function config () {
           exclude: [
             /node_modules/,
             /\.min.js$/,
+            path.resolve(__dirname, 'app', 'browser', '*'),
             path.resolve(__dirname, 'app', 'extensions', '*')
           ],
           loader: 'babel'
         },
         {
           test: /\.less$/,
-          loader: 'style-loader!css-loader!less-loader'
+          loader: 'style-loader!css-loader?-minimize!less-loader'
         },
         {
           test: /\.css$/,
-          loader: 'style-loader!css-loader'
+          loader: 'style-loader!css-loader?-minimize'
         },
         {
           test: /\.json$/,
@@ -50,48 +51,70 @@ function config () {
     resolve: {
       extensions: ['', '.js', '.jsx']
     },
+    externals: {
+      'electron': 'chrome'
+    },
     plugins: [
-      new WebpackNotifierPlugin({title: 'Brave-' + env}),
       new webpack.IgnorePlugin(/^\.\/stores\/appStore$/),
-      new webpack.IgnorePlugin(/^spellchecker/),
       new webpack.DefinePlugin({
         'process.env': {
           NODE_ENV: JSON.stringify(env),
-          BRAVE_PORT: port,
-          GOOGLE_API_ENDPOINT: process.env.GOOGLE_API_ENDPOINT,
-          GOOGLE_API_KEY: process.env.GOOGLE_API_KEY
+          BRAVE_PORT: port
         }
       })
     ],
     node: {
+      process: false,
       __filename: true,
       __dirname: true,
       fs: 'empty'
     }
   }
+  if (!process.env.DISABLE_WEBPACK_NOTIFIER) {
+    c.plugins.push(new WebpackNotifierPlugin({title: 'Brave-' + env}))
+  }
+  return c
 }
 
-function development () {
+function watchOptions () {
+  return {
+    watchOptions: {
+      ignored: [
+        /node_modules/,
+        'test/**'
+      ]
+    }
+  }
+}
+
+function development () {  // eslint-disable-line
   var dev = config()
   dev.devServer = {
-    publicPath: 'http://localhost:' + port + '/gen/'
+    publicPath: 'http://localhost:' + port + '/gen/',
+    headers: { 'Access-Control-Allow-Origin': '*' }
   }
-  return dev
+  return Object.assign(dev, watchOptions())
 }
 
-function production () {
+function production () {  // eslint-disable-line
   var prod = config()
   prod.plugins.push(new webpack.optimize.DedupePlugin())
   prod.plugins.push(new webpack.optimize.OccurrenceOrderPlugin(true))
-  prod.plugins.push(new webpack.optimize.UglifyJsPlugin({
-    compress: {
-      warnings: false
-    },
-    mangle: {
-      except: ['module', 'exports', 'require']
-    }
-  }))
+  if (env !== 'test') {
+    prod.plugins.push(new webpack.optimize.UglifyJsPlugin({
+      compress: {
+        warnings: false
+      },
+      mangle: {
+        except: ['module', 'exports', 'require']
+      }
+    }))
+  }
   return prod
+}
+
+function test () {  // eslint-disable-line
+  return Object.assign(production(), watchOptions())
 }
 
 function merge (config, env) {
@@ -101,24 +124,28 @@ function merge (config, env) {
 }
 
 var app = {
-  name: 'app',
-  target: 'electron',
-  entry: ['./js/entry.js'],
+  target: 'web',
+  entry: {
+    app: [ path.resolve(__dirname, 'js', 'entry.js') ],
+    aboutPages: [ path.resolve(__dirname, 'js', 'about', 'entry.js') ]
+  },
   output: {
     path: path.resolve(__dirname, 'app', 'extensions', 'brave', 'gen'),
-    filename: 'app.entry.js',
+    filename: '[name].entry.js',
     publicPath: './gen/'
   }
 }
 
-var aboutPages = {
-  name: 'about',
+var devTools = {
   target: 'web',
-  entry: ['./js/about/entry.js'],
+  entry: {
+    devTools: [ path.resolve(__dirname, 'js', 'devTools.js') ]
+  },
   output: {
     path: path.resolve(__dirname, 'app', 'extensions', 'brave', 'gen'),
-    filename: 'aboutPages.entry.js',
-    publicPath: './gen/'
+    filename: 'lib.[name].js',
+    publicPath: './gen/',
+    library: '[name]'
   }
 }
 
@@ -133,20 +160,9 @@ var webtorrentPage = {
   }
 }
 
-module.exports = {
-  development: [
-    merge(app, development()),
-    merge(aboutPages, development()),
-    merge(webtorrentPage, development())
-  ],
-  production: [
-    merge(app, production()),
-    merge(aboutPages, production()),
-    merge(webtorrentPage, production())
-  ],
-  test: [
-    merge(app, production()),
-    merge(aboutPages, production()),
-    merge(webtorrentPage, production())
-  ]
-}[env]
+const envConfig = eval(env)  // eslint-disable-line
+module.exports = [
+  merge(app, envConfig()),
+  merge(devTools, envConfig()),
+  merge(webtorrentPage, envConfig())
+]

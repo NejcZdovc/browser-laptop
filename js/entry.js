@@ -6,67 +6,58 @@
 require('../less/window.less')
 require('../less/button.less')
 require('../less/contextMenu.less')
-require('../less/popupWindow.less')
 require('../less/main.less')
 require('../less/navigationBar.less')
 require('../less/forms.less')
 require('../less/switchControls.less')
 require('../less/tabs.less')
 require('../less/findbar.less')
-require('../less/dialogs.less')
-require('../less/updateBar.less')
 require('../less/downloadBar.less')
 require('../less/bookmarksToolbar.less')
 require('../less/notificationBar.less')
-require('../less/addEditBookmark.less')
 require('../node_modules/font-awesome/css/font-awesome.css')
-
-// Enable or disable crash reporting based on platform
-const setupCrashReporting = () => {
-  if (process.platform === 'darwin') {
-    // Setup the crash handling for mac renderer processes
-    // https://github.com/electron/electron/blob/master/docs/api/crash-reporter.md#crashreporterstartoptions
-    console.log('macOS renderer crash reporting initialized')
-    require('../app/crash-herald').init()
-  }
-}
-
-// Notify that renderer crash reporting is disabled
-const disableCrashReporting = () => {
-  console.log('Disabling renderer crash reporting')
-}
 
 const React = require('react')
 const ReactDOM = require('react-dom')
-const Window = require('./components/window')
-const electron = global.require('electron')
-const currentWindow = require('../app/renderer/currentWindow')
-const ipc = electron.ipcRenderer
-const webFrame = electron.webFrame
-const windowStore = require('./stores/windowStore')
-const appStoreRenderer = require('./stores/appStoreRenderer')
-const windowActions = require('./actions/windowActions')
-const messages = require('./constants/messages')
 const Immutable = require('immutable')
 const patch = require('immutablepatch')
-const l10n = require('./l10n')
+const electron = require('electron')
+const ipc = electron.ipcRenderer
+const webFrame = electron.webFrame
 
-// don't allow scaling or zooming of the ui
+// Components
+const Window = require('../app/renderer/components/window')
+
+// Store
+const windowStore = require('./stores/windowStore')
+const appStoreRenderer = require('./stores/appStoreRenderer')
+
+// Actions
+const windowActions = require('./actions/windowActions')
+const appActions = require('./actions/appActions')
+
+// Constants
+const messages = require('./constants/messages')
+
+// Utils
+const l10n = require('./l10n')
+const currentWindow = require('../app/renderer/currentWindow')
+
 webFrame.setPageScaleLimits(1, 1)
-webFrame.setZoomLevelLimits(0, 0)
-// override any default zoom level changes
-currentWindow.webContents.setZoomLevel(0.0)
 
 l10n.init()
 
-ipc.on(messages.REQUEST_WINDOW_STATE, () => {
-  ipc.send(messages.RESPONSE_WINDOW_STATE, windowStore.getState().toJS())
+ipc.on(messages.REQUEST_WINDOW_STATE, (evt, requestId) => {
+  ipc.send(messages.RESPONSE_WINDOW_STATE, windowStore.getState().toJS(), requestId)
 })
 
 if (process.env.NODE_ENV === 'test') {
-  window.appStoreRenderer = appStoreRenderer
-  window.windowActions = windowActions
-  window.windowStore = windowStore
+  electron.testData = {
+    appStoreRenderer,
+    windowActions,
+    windowStore
+  }
+  appActions.changeSetting('tabs.show-dashboard-images', false)
 }
 
 ipc.on(messages.APP_STATE_CHANGE, (e, action) => {
@@ -79,20 +70,41 @@ ipc.on(messages.CLEAR_CLOSED_FRAMES, () => {
   windowActions.clearClosedFrames()
 })
 
-window.addEventListener('beforeunload', function () {
+window.addEventListener('beforeunload', function (e) {
   ipc.send(messages.LAST_WINDOW_STATE, windowStore.getState().toJS())
 })
 
-// get appStore from url
-ipc.on(messages.INITIALIZE_WINDOW, (e, disposition, appState, frames, initWindowState) => {
-  // Configure renderer crash reporting
-  if (appState.settings[require('./constants/settings').SEND_CRASH_REPORTS] !== false) {
-    setupCrashReporting()
-  } else {
-    disableCrashReporting()
-  }
-  appStoreRenderer.state = Immutable.fromJS(appState)
-  ReactDOM.render(
-    <Window includePinnedSites={disposition !== 'new-popup'} frames={frames} initWindowState={initWindowState} />,
-    document.getElementById('windowContainer'))
+ipc.on(messages.INITIALIZE_WINDOW, (e, mem) => {
+  const message = mem.memory()
+  const windowValue = message.windowValue
+
+  currentWindow.setWindowId(windowValue.id)
+  const newState = Immutable.fromJS(message.windowState) || windowStore.getState()
+
+  appStoreRenderer.state = Immutable.fromJS(message.appState)
+  windowStore.state = newState
+  generateTabs(newState, message.frames, windowValue.id)
+  appActions.windowReady(windowValue.id)
+  ReactDOM.render(<Window />, document.getElementById('appContainer'))
 })
+
+const generateTabs = (windowState, frames, windowId) => {
+  const activeFrameKey = windowState.get('activeFrameKey')
+
+  frames.forEach((frame, i) => {
+    if (frame.guestInstanceId) {
+      appActions.newWebContentsAdded(windowId, frame)
+    } else {
+      appActions.createTabRequested({
+        url: frame.location || frame.src || frame.provisionalLocation,
+        partitionNumber: frame.partitionNumber,
+        isPrivate: frame.isPrivate,
+        active: activeFrameKey ? frame.key === activeFrameKey : true,
+        discarded: frame.unloaded,
+        title: frame.title,
+        faviconUrl: frame.icon,
+        index: i
+      }, false, true /* isRestore */)
+    }
+  })
+}

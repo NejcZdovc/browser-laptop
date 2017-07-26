@@ -3,47 +3,101 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const Immutable = require('immutable')
+
+// Constants
 const config = require('../constants/config')
-const urlParse = require('url').parse
+const settings = require('../constants/settings')
+
+// Actions
+const windowActions = require('../actions/windowActions')
+const webviewActions = require('../actions/webviewActions')
+const appActions = require('../actions/appActions')
+
+// State
+const {makeImmutable} = require('../../app/common/state/immutableUtil')
+
+// Utils
+const {getSetting} = require('../settings')
+const {isIntermediateAboutPage} = require('../lib/appUrlUtil')
+const urlParse = require('../../app/common/urlParse')
+
+let tabPageHoverTimeout
+let tabHoverTimeout = null
+
+const comparatorByKeyAsc = (a, b) => a.get('key') > b.get('key')
+  ? 1 : b.get('key') > a.get('key') ? -1 : 0
 
 const matchFrame = (queryInfo, frame) => {
   queryInfo = queryInfo.toJS ? queryInfo.toJS() : queryInfo
   return !Object.keys(queryInfo).map((queryKey) => (frame.get(queryKey) === queryInfo[queryKey])).includes(false)
 }
 
-function query (windowState, queryInfo) {
-  return windowState.get('frames').filter(matchFrame.bind(null, queryInfo))
+function query (state, queryInfo) {
+  return state.get('frames').filter(matchFrame.bind(null, queryInfo))
 }
 
-function find (windowState, queryInfo) {
-  return windowState.get('frames').find(matchFrame.bind(null, queryInfo))
+function find (state, queryInfo) {
+  return state.get('frames').find(matchFrame.bind(null, queryInfo))
 }
 
-function isFrameKeyActive (windowState, frameKey) {
-  return windowState.get('activeFrameKey') === frameKey
+function isFrameKeyActive (state, frameKey) {
+  return getActiveFrameKey(state) === frameKey
 }
 
-function getFrameDisplayIndex (windowState, frame) {
-  return findDisplayIndexForFrameKey(windowState.get('frames'), frame)
+function getFrames (state) {
+  return state.get('frames')
 }
 
-function getFrameIndex (windowState, frame) {
-  return findIndexForFrameKey(windowState.get('frames'), frame)
+function getSortedFrames (state) {
+  return state.get('frames').sort(comparatorByKeyAsc)
 }
 
-function getActiveFrameDisplayIndex (windowState) {
-  return getFrameDisplayIndex(windowState, windowState.get('activeFrameKey'))
+function getSortedFrameKeys (state) {
+  return state.get('frames')
+    .sort(comparatorByKeyAsc)
+    .map(frame => frame.get('key'))
 }
 
-function getActiveFrameIndex (windowState) {
-  return getFrameIndex(windowState, windowState.get('activeFrameKey'))
+function getPinnedFrames (state) {
+  return state.get('frames').filter((frame) => frame.get('pinnedLocation'))
 }
 
-function getFrameByIndex (windowState, i) {
-  return windowState.getIn(['frames', i])
+function getNonPinnedFrames (state) {
+  return state.get('frames').filter((frame) => !frame.get('pinnedLocation'))
 }
 
-function getFrameKeysByDisplayIndex (frames) {
+function getFrameIndex (state, key) {
+  return getFramesInternalIndex(state, key)
+}
+
+function getActiveFrameIndex (state) {
+  return getFrameIndex(state, getActiveFrameKey(state))
+}
+
+function getActiveFrameTabId (state) {
+  const activeFrame = getActiveFrame(state)
+  return activeFrame && activeFrame.get('tabId')
+}
+
+function getFrameByIndex (state, i) {
+  if (i === -1) {
+    return null
+  }
+  return state.getIn(['frames', i])
+}
+
+// This will eventually go away fully when we replace frameKey by tabId
+function getFrameKeyByTabId (state, tabId) {
+  let parentFrameKey = null
+  const openerFrame = getFrameByTabId(state, tabId)
+  if (openerFrame) {
+    parentFrameKey = openerFrame.get('key')
+  }
+  return parentFrameKey
+}
+
+function getFrameKeysByDisplayIndex (state) {
+  const frames = state.get('frames')
   let framesByDisplayIndex = [[], []]
   frames.forEach((frame) => {
     let key = frame.get('key')
@@ -58,121 +112,138 @@ function getFrameKeysByDisplayIndex (frames) {
   }, [])
 }
 
-function getFrameByDisplayIndex (windowState, i) {
-  let frames = getFrameKeysByDisplayIndex(windowState.get('frames'))
+function getTabIdsByNonPinnedDisplayIndex (state) {
+  return state.get('frames')
+    .filter((frame) => !frame.get('pinnedLocation'))
+    .map((frame) => frame.get('tabId'))
+}
+
+ /**
+ * Obtains the display index for the specified tab ID excluding pins
+ */
+function findNonPinnedDisplayIndexForTabId (state, tabId) {
+  return getTabIdsByNonPinnedDisplayIndex(state)
+    .findIndex((displayKey) => displayKey === tabId)
+}
+
+function getFrameByDisplayIndex (state, i) {
+  let frames = getFrameKeysByDisplayIndex(state)
   let key = frames[i]
-  return getFrameByKey(windowState, key)
+  return getFrameByKey(state, key)
 }
 
-function getFrameByKey (windowState, key) {
-  return find(windowState, {key})
+function getFrameByKey (state, key) {
+  const index = getFrameIndex(state, key)
+  if (index === -1) {
+    return null
+  }
+  return state.getIn(['frames', index])
 }
 
-function isFrameKeyPinned (frames, key) {
+function isFrameSecure (frame) {
+  frame = makeImmutable(frame)
+  if (frame && typeof frame.getIn(['security', 'isSecure']) === 'boolean') {
+    return frame.getIn(['security', 'isSecure'])
+  } else {
+    return false
+  }
+}
+
+function isFrameLoading (frame) {
+  frame = makeImmutable(frame)
+  return frame && frame.get('loading')
+}
+
+function startLoadTime (frame) {
+  frame = makeImmutable(frame)
+  return frame && frame.get('startLoadTime')
+}
+
+function endLoadTime (frame) {
+  frame = makeImmutable(frame)
+  return frame && frame.get('endLoadTime')
+}
+
+function getHistory (frame) {
+  frame = makeImmutable(frame)
+  return (frame && frame.get('history')) || Immutable.fromJS([])
+}
+
+function isFrameKeyPinned (state, key) {
   if (typeof key !== 'number') {
     return false
   }
-  const frame = frames.find(matchFrame.bind(null, {key}))
+  const frame = getFrameByKey(state, key)
   return frame ? frame.get('pinnedLocation') : false
 }
 
-function getFrameByTabId (windowState, tabId) {
-  return find(windowState, {tabId})
+function getNonPinnedFrameCount (state) {
+  return state.get('frames').filter((frame) => !frame.get('pinnedLocation')).size
 }
 
-function getActiveFrame (windowState) {
-  const activeFrameIndex = getActiveFrameIndex(windowState)
-  return windowState.get('frames').get(activeFrameIndex)
+function getFrameByTabId (state, tabId) {
+  return getFrameByIndex(state, getFramesInternalIndexByTabId(state, tabId))
 }
 
-function setActiveFrameDisplayIndex (windowState, i) {
-  const frame = getFrameByDisplayIndex(windowState, i)
+function getIndexByTabId (state, tabId) {
+  return getFramesInternalIndexByTabId(state, tabId)
+}
+
+function getActiveFrame (state) {
+  const activeFrameIndex = getActiveFrameIndex(state)
+  return state.get('frames').get(activeFrameIndex)
+}
+
+// Returns the same as the active frame's location, but returns the requested
+// URL if it's safe browsing, a cert error page or an error page.
+function getLastCommittedURL (frame) {
+  frame = makeImmutable(frame)
   if (!frame) {
-    return windowState
+    return undefined
   }
 
-  return setActiveFrameKey(windowState, frame.get('key'))
-}
-
-function setActiveFrameIndex (windowState, i) {
-  const frame = getFrameByIndex(windowState, i)
-  if (!frame) {
-    return windowState
+  let location = frame.get('location')
+  const history = getHistory(frame)
+  if (isIntermediateAboutPage(location)) {
+    const parsedUrl = urlParse(location)
+    if (parsedUrl.hash) {
+      location = parsedUrl.hash.split('#')[1]
+    } else if (history.size > 0) {
+      location = history.last()
+    }
   }
-
-  return setActiveFrameKey(windowState, frame.get('key'))
+  return location
 }
 
-function setActiveFrameKey (windowState, activeFrameKey) {
-  return windowState.merge({
-    activeFrameKey: activeFrameKey,
-    previewFrameKey: null
-  })
+function getActiveFrameKey (state) {
+  return state.get('activeFrameKey')
 }
 
-function makeNextFrameActive (windowState) {
-  const activeFrameIndex = getActiveFrameDisplayIndex(windowState)
-  return setActiveFrameDisplayIndex(windowState, (activeFrameIndex + 1) % windowState.get('frames').size)
+const setActiveFrameKey = (state, frameKey) => {
+  return state.set('activeFrameKey', frameKey)
 }
 
-function makePrevFrameActive (windowState) {
-  const activeFrameIndex = getActiveFrameDisplayIndex(windowState)
-  return setActiveFrameDisplayIndex(windowState, (windowState.get('frames').size + activeFrameIndex - 1) % windowState.get('frames').size)
+const setFrameLastAccessedTime = (state, index) => {
+  return state.setIn(['frames', index, 'lastAccessedTime'], new Date().getTime())
 }
 
-/**
- * @param {Object} windowState
- * @param {Object} frameProps
- * @param {String} propName
- * @return {Object} the value of the propName associated with frameProps
- */
-function getFramePropValue (windowState, frameProps, propName) {
-  return windowState.getIn(getFramePropPath(windowState, frameProps, propName))
+function getNextFrame (state) {
+  const activeFrameIndex = findDisplayIndexForFrameKey(state, getActiveFrameKey(state))
+  const index = (activeFrameIndex + 1) % state.get('frames').size
+  return getFrameByDisplayIndex(state, index)
 }
 
-/**
- * @param {Object} windowState
- * @param {Object} frameProps
- * @param {String} propName
- * @return {Object} the path of the propName in windowState
- */
-function getFramePropPath (windowState, frameProps, propName) {
-  return ['frames', getFramePropsIndex(windowState.get('frames'), frameProps), propName]
-}
-
-/**
- * Obtains the index for the specified frame key
- */
-function findIndexForFrameKey (frames, key) {
-  return frames.findIndex(matchFrame.bind(null, {key}))
+function getPreviousFrame (state) {
+  const activeFrameIndex = findDisplayIndexForFrameKey(state, getActiveFrameKey(state))
+  const index = (state.get('frames').size + activeFrameIndex - 1) % state.get('frames').size
+  return getFrameByDisplayIndex(state, index)
 }
 
 /**
  * Obtains the display index for the specified frame key
  */
-function findDisplayIndexForFrameKey (frames, key) {
-  return getFrameKeysByDisplayIndex(frames).findIndex((displayKey) => displayKey === key)
-}
-
-/**
- * Obtains the frameProps index in the frames
- */
-function getFramePropsIndex (frames, frameProps) {
-  if (!frameProps) {
-    return -1
-  }
-  let queryInfo = frameProps.toJS ? frameProps.toJS() : frameProps
-  if (queryInfo.tabId) {
-    queryInfo = {
-      tabId: queryInfo.tabId
-    }
-  }
-  if (queryInfo.key) {
-    queryInfo = {
-      key: queryInfo.key
-    }
-  }
-  return frames.findIndex(matchFrame.bind(null, queryInfo))
+function findDisplayIndexForFrameKey (state, key) {
+  return getFrameKeysByDisplayIndex(state).findIndex((displayKey) => displayKey === key)
 }
 
 /**
@@ -187,7 +258,7 @@ function getFramePropsIndex (frames, frameProps) {
  * It should go like so:
  * G g1 g1.1 g2 g3 g4
  */
-function isAncestorFrameKey (frames, frame, parentFrameKey) {
+function isAncestorFrameKey (state, frame, parentFrameKey) {
   if (!frame || !frame.get('parentFrameKey')) {
     return false
   }
@@ -199,12 +270,22 @@ function isAncestorFrameKey (frames, frame, parentFrameKey) {
   // So there is a parentFrameKey but it isn't the specified one.
   // Check recursively for each of the parentFrame's ancestors to see
   // if we have a match.
-  const parentFrameIndex = findIndexForFrameKey(frames, frame.get('parentFrameKey'))
-  const parentFrame = frames.get(parentFrameIndex)
+  const parentFrameIndex = getFrameIndex(state, frame.get('parentFrameKey'))
+  const parentFrame = state.getIn(['frames', parentFrameIndex])
   if (parentFrameIndex === -1 || !parentFrame.get('parentFrameKey')) {
     return false
   }
-  return isAncestorFrameKey(frames, parentFrame, parentFrameKey)
+  return isAncestorFrameKey(state, parentFrame, parentFrameKey)
+}
+
+function getPartitionNumber (partition) {
+  const regex = /(?:persist:)?partition-(\d+)/
+  const matches = regex.exec(partition)
+  return Number((matches && matches[1]) || 0)
+}
+
+function isPrivatePartition (partition) {
+  return partition && !partition.startsWith('persist:')
 }
 
 function isSessionPartition (partition) {
@@ -212,141 +293,79 @@ function isSessionPartition (partition) {
 }
 
 function getPartition (frameOpts) {
-  let partition = 'persist:default'
-  if (frameOpts.get('isPrivate')) {
-    partition = 'default'
-  } else if (frameOpts.get('partitionNumber')) {
-    partition = `persist:partition-${frameOpts.get('partitionNumber')}`
-  }
-  return partition
+  return getPartitionFromNumber(frameOpts.get('partitionNumber'), frameOpts.get('isPrivate'))
 }
 
-function cloneFrame (frameOpts, guestInstanceId, key) {
-  const cloneableAttributes = [
-    'audioMuted',
-    'canGoBack',
-    'canGoForward',
-    'icon',
-    'title',
-    'isPrivate',
-    'partitionNumber',
-    'themeColor',
-    'computedThemeColor'
-  ]
-  let clone = {}
-  cloneableAttributes.forEach((attr) => {
-    clone[attr] = frameOpts[attr]
-  })
-
-  clone.guestInstanceId = guestInstanceId
-  // copy the history
-  clone.history = frameOpts.history.slice(0)
-  // location is loaded by the webcontents
-  clone.delayedLoadUrl = frameOpts.location
-  clone.location = 'about:blank'
-  clone.src = 'about:blank'
-  clone.parentFrameKey = frameOpts.key
-  if (frameOpts.aboutDetails !== undefined) {
-    clone.aboutDetails = frameOpts.aboutDetails
-    clone.aboutDetails.frameKey = key
+function getPartitionFromNumber (partitionNumber, incognito) {
+  if (!partitionNumber && !incognito) {
+    return 'persist:default'
+  } else if (incognito) {
+    return 'default'
   }
-  return clone
+  return `persist:partition-${partitionNumber}`
 }
 
-/**
- * Returns an object in the same format that was passed to it (ImmutableJS/POD)
- * for the subset of frame data that is used for tabs.
- */
-const tabFromFrame = (frame) => {
-  return frame.toJS
-  ? Immutable.fromJS({
-    themeColor: frame.get('themeColor'),
-    computedThemeColor: frame.get('computedThemeColor'),
-    icon: frame.get('icon'),
-    audioPlaybackActive: frame.get('audioPlaybackActive'),
-    audioMuted: frame.get('audioMuted'),
-    title: frame.get('title'),
-    isPrivate: frame.get('isPrivate'),
-    partitionNumber: frame.get('partitionNumber'),
-    frameKey: frame.get('key'),
-    loading: frame.get('loading'),
-    provisionalLocation: frame.get('provisionalLocation'),
-    pinnedLocation: frame.get('pinnedLocation'),
-    location: frame.get('location')
-  })
-  : {
-    themeColor: frame.themeColor,
-    computedThemeColor: frame.computedThemeColor,
-    icon: frame.icon,
-    audioPlaybackActive: frame.audioPlaybackActive,
-    audioMuted: frame.audioMuted,
-    title: frame.title,
-    isPrivate: frame.isPrivate,
-    partitionNumber: frame.partitionNumber,
-    frameKey: frame.key,
-    loading: frame.loading,
-    provisionalLocation: frame.provisionalLocation,
-    pinnedLocation: frame.pinnedLocation,
-    location: frame.location
-  }
+const frameOptsFromFrame = (frame) => {
+  return frame
+    .delete('key')
+    .delete('parentFrameKey')
+    .delete('activeShortcut')
+    .delete('activeShortcutDetails')
+    .delete('index')
+    .deleteIn(['navbar', 'urlbar', 'suggestions'])
 }
 
 /**
  * Adds a frame specified by frameOpts and newKey and sets the activeFrameKey
  * @return Immutable top level application state ready to merge back in
  */
-function addFrame (frames, tabs, frameOpts, newKey, partitionNumber, activeFrameKey, insertionIndex) {
-  const url = frameOpts.location || config.defaultUrl
+function addFrame (state, frameOpts, newKey, partitionNumber, openInForeground, insertionIndex) {
+  const frames = state.get('frames')
 
-  // delayedLoadUrl is used as a placeholder when the new frame is created
-  // from a renderer initiated navigation (window.open, cmd/ctrl-click, etc...)
-  const delayedLoadUrl = frameOpts.delayedLoadUrl
-  delete frameOpts.delayedLoadUrl
-  const navbarFocus = activeFrameKey === newKey &&
-                      url === config.defaultUrl &&
-                      delayedLoadUrl === undefined
-  const location = delayedLoadUrl || url // page url
+  const location = frameOpts.location // page url
+  const displayURL = frameOpts.displayURL == null ? location : frameOpts.displayURL
+  delete frameOpts.displayURL
+
+  const rendererInitiated = frameOpts.rendererInitiated
+  delete frameOpts.rendererInitiated
 
   // Only add pin requests if it's not already added
   const isPinned = frameOpts.isPinned
   delete frameOpts.isPinned
-  if (isPinned) {
-    const alreadyPinnedFrameProps = frames.find((frame) =>
-      frame.get('pinnedLocation') === location && frame.get('partitionNumber') === partitionNumber)
-    if (alreadyPinnedFrameProps) {
-      return {}
-    }
+
+  // TODO: longer term get rid of parentFrameKey completely instead of
+  // calculating it here.
+  let parentFrameKey = frameOpts.parentFrameKey
+  if (frameOpts.openerTabId) {
+    parentFrameKey = getFrameKeyByTabId(state, frameOpts.openerTabId)
   }
 
   const frame = Immutable.fromJS(Object.assign({
     zoomLevel: config.zoom.defaultValue,
     audioMuted: false, // frame is muted
-    canGoBack: false,
-    canGoForward: false,
     location,
     aboutDetails: undefined,
-    src: url, // what the iframe src should be
-    tabId: -1,
-    // if this is a delayed load then go ahead and start the loading indicator
-    loading: !!delayedLoadUrl,
-    startLoadTime: delayedLoadUrl ? new Date().getTime() : null,
+    src: location, // what the iframe src should be
+    tabId: frameOpts.tabId == null ? -1 : frameOpts.tabId,
+    loading: frameOpts.rendererInitiated,
+    startLoadTime: null,
     endLoadTime: null,
+    lastAccessedTime: openInForeground ? new Date().getTime() : null,
     isPrivate: false,
     partitionNumber,
-    pinnedLocation: isPinned ? url : undefined,
+    pinnedLocation: isPinned ? location : undefined,
     key: newKey,
     navbar: {
-      focused: navbarFocus,
       urlbar: {
-        location: url,
-        urlPreview: '',
+        location: rendererInitiated ? location : displayURL,
         suggestions: {
           selectedIndex: 0,
           searchResults: [],
           suggestionList: null
         },
-        selected: navbarFocus,
-        focused: navbarFocus,
+        selected: false,
+        // URL load-start will focus the webview if it's not newtab.
+        focused: true,
         active: false
       }
     },
@@ -356,38 +375,15 @@ function addFrame (frames, tabs, frameOpts, newKey, partitionNumber, activeFrame
       caseSensitivity: false
     },
     security: {
-      isSecure: urlParse(url).protocol === 'https:',
-      certDetails: null
+      isSecure: null
     },
     unloaded: frameOpts.unloaded,
+    parentFrameKey,
     history: []
   }, frameOpts))
 
   return {
-    tabs: tabs.splice(insertionIndex, 0, tabFromFrame(frame)),
-    frames: frames.splice(insertionIndex, 0, frame),
-    activeFrameKey
-  }
-}
-
-/**
- * Undoes a frame close and inserts it at the last index
- * @return Immutable top level application state ready to merge back in
- */
-function undoCloseFrame (windowState, closedFrames) {
-  if (closedFrames.size === 0) {
-    return {}
-  }
-  const closedFrame = closedFrames.last()
-  const insertIndex = closedFrame.get('closedAtIndex')
-  return {
-    closedFrames: closedFrames.pop(),
-    tabs: windowState.get('tabs').splice(insertIndex, 0, tabFromFrame(closedFrame)),
-    frames: windowState.get('frames').splice(insertIndex, 0,
-          closedFrame
-          .delete('guestInstanceId')
-          .set('src', closedFrame.get('location'))),
-    activeFrameKey: closedFrame.get('key')
+    frames: frames.splice(insertionIndex, 0, frame)
   }
 }
 
@@ -395,36 +391,12 @@ function undoCloseFrame (windowState, closedFrames) {
  * Removes a frame specified by frameProps
  * @return Immutable top level application state ready to merge back in
  */
-function removeFrame (frames, tabs, closedFrames, frameProps, activeFrameKey) {
-  function getNewActiveFrame (activeFrameIndex) {
-    // Go to the next frame if it exists.
-    let index = activeFrameIndex
-    let nextFrame = frames.get(index)
-    do {
-      if (nextFrame) {
-        if (nextFrame.get('pinnedLocation') === undefined) {
-          return nextFrame.get('key')
-        }
-        nextFrame = frames.get(++index)
-      }
-    } while (nextFrame)
-    // Otherwise go to the frame right before the active tab.
-    index = activeFrameIndex
-    while (index > 0) {
-      const prevFrame = frames.get(--index)
-      if (prevFrame && prevFrame.get('pinnedLocation') === undefined) {
-        return prevFrame.get('key')
-      }
-    }
-    // Fall back on the original logic.
-    return Math.max(
-      frames.get(activeFrameIndex)
-      ? frames.get(activeFrameIndex).get('key')
-      : frames.get(activeFrameIndex - 1).get('key'),
-    0)
-  }
+function removeFrame (state, frameProps, framePropsIndex) {
+  const frames = state.get('frames')
+  let closedFrames = state.get('closedFrames')
+  const newFrames = frames.splice(framePropsIndex, 1)
 
-  if (!frameProps.get('isPrivate') && frameProps.get('location') !== 'about:newtab') {
+  if (isValidClosedFrame(frameProps)) {
     frameProps = frameProps.set('isFullScreen', false)
     closedFrames = closedFrames.push(frameProps)
     if (frameProps.get('thumbnailBlob')) {
@@ -435,100 +407,360 @@ function removeFrame (frames, tabs, closedFrames, frameProps, activeFrameKey) {
     }
   }
 
-  // If the frame being removed IS ACTIVE, then try to replace activeFrameKey with parentFrameKey
-  let isActiveFrameBeingRemoved = frameProps.get('key') === activeFrameKey
-  let parentFrameIndex = findIndexForFrameKey(frames, frameProps.get('parentFrameKey'))
-  let activeFrameIndex
-
-  if (!isActiveFrameBeingRemoved || parentFrameIndex === -1) {
-    activeFrameIndex = findIndexForFrameKey(frames, activeFrameKey)
-  } else {
-    activeFrameIndex = parentFrameIndex
-  }
-
-  const framePropsIndex = getFramePropsIndex(frames, frameProps)
-  frames = frames.splice(framePropsIndex, 1)
-  tabs = tabs.splice(framePropsIndex, 1)
-
-  let newActiveFrameKey = activeFrameKey
-  if (isActiveFrameBeingRemoved && frames.size > 0) {
-    // Frame with focus was closed; let's find new active NON-PINNED frame.
-    newActiveFrameKey = getNewActiveFrame(activeFrameIndex)
-  }
-
   return {
-    previewFrameKey: null,
-    activeFrameKey: newActiveFrameKey,
     closedFrames,
-    tabs,
-    frames
+    frames: newFrames
   }
 }
 
-/**
- * Removes all but the specified frameProps
- * @return Immutable top level application state ready to merge back in
- */
-function removeOtherFrames (frames, tabs, closedFrames, frameProps) {
-  closedFrames = closedFrames.concat(frames.filter((currentFrameProps) => !currentFrameProps.get('isPrivate') && currentFrameProps.get('key') !== frameProps.get('key')))
-    .take(config.maxClosedFrames)
-  closedFrames.forEach((currentFrameProps) => {
-    if (currentFrameProps.get('thumbnailBlob')) {
-      window.URL.revokeObjectURL(currentFrameProps.get('thumbnailBlob'))
-    }
-  })
-
-  frames = Immutable.fromJS([frameProps])
-  tabs = tabFromFrame(frames.get(0))
-  return {
-    activeFrameKey: frameProps.get('key'),
-    closedFrames,
-    tabs,
-    frames
-  }
-}
-
-function getFrameTabPageIndex (frames, frameProps, tabsPerTabPage) {
-  const index = getFramePropsIndex(frames, frameProps)
+function getFrameTabPageIndex (state, tabId, tabsPerTabPage = getSetting(settings.TABS_PER_PAGE)) {
+  const index = findNonPinnedDisplayIndexForTabId(state, tabId)
   if (index === -1) {
     return -1
   }
   return Math.floor(index / tabsPerTabPage)
 }
 
+function onFindBarHide (frameKey) {
+  windowActions.setFindbarShown(frameKey, false)
+  webviewActions.stopFindInPage()
+  windowActions.setFindDetail(frameKey, Immutable.fromJS({
+    internalFindStatePresent: false,
+    numberOfMatches: -1,
+    activeMatchOrdinal: 0
+  }))
+}
+
+function getTotalBlocks (frame) {
+  if (!frame) {
+    return false
+  }
+
+  frame = makeImmutable(frame)
+
+  const ads = frame.getIn(['adblock', 'blocked'])
+  const trackers = frame.getIn(['trackingProtection', 'blocked'])
+  const scripts = frame.getIn(['noScript', 'blocked'])
+  const fingerprint = frame.getIn(['fingerprintingProtection', 'blocked'])
+  const blocked = (ads && ads.size ? ads.size : 0) +
+    (trackers && trackers.size ? trackers.size : 0) +
+    (scripts && scripts.size ? scripts.size : 0) +
+    (fingerprint && fingerprint.size ? fingerprint.size : 0)
+
+  return (blocked === 0)
+    ? false
+    : ((blocked > 99) ? '99+' : blocked)
+}
+
+/**
+ * Check if frame is pinned or not
+ */
+function isPinned (state, frameKey) {
+  const frame = getFrameByKey(state, frameKey)
+
+  return frame && !!frame.get('pinnedLocation')
+}
+
+/**
+ * Updates the tab page index to the specified frameProps
+ * @param state{Object} - Window state
+ * @param tabId{number} - Tab id for the frame
+ * @param tabsPerPage{string} - Current setting for tabs per page, with a default value
+ */
+function updateTabPageIndex (state, tabId, tabsPerPage = getSetting(settings.TABS_PER_PAGE)) {
+  const index = getFrameTabPageIndex(state, tabId, tabsPerPage)
+
+  if (index === -1) {
+    return state
+  }
+
+  return state.setIn(['ui', 'tabs', 'tabPageIndex'], index)
+}
+const frameStatePath = (state, frameKey) => {
+  const index = getFrameIndex(state, frameKey)
+  if (index === -1) {
+    return null
+  }
+  return ['frames', index]
+}
+
+const frameStatePathByTabId = (state, tabId) => {
+  const index = getIndexByTabId(state, tabId)
+  if (index === -1) {
+    return null
+  }
+  return ['frames', index]
+}
+
+const activeFrameStatePath = (state) => frameStatePath(state, getActiveFrameKey(state))
+
+const getFramesInternalIndex = (state, frameKey) => {
+  if (frameKey == null) return -1
+
+  const index = state.getIn(['framesInternal', 'index', frameKey.toString()])
+  return index == null ? -1 : index
+}
+
+const getFramesInternalIndexByTabId = (state, tabId) => {
+  if (tabId == null) return -1
+
+  const index = state.getIn(['framesInternal', 'tabIndex', tabId.toString()])
+  return index == null ? -1 : index
+}
+
+const deleteTabInternalIndex = (state, tabId) => {
+  return state.deleteIn(['framesInternal', 'tabIndex', tabId.toString()])
+}
+
+const deleteFrameInternalIndex = (state, frame) => {
+  if (!frame) {
+    return state
+  }
+
+  state = state.deleteIn(['framesInternal', 'index', frame.get('key').toString()])
+  return deleteTabInternalIndex(state, frame.get('tabId'))
+}
+
+const updateFramesInternalIndex = (state, fromIndex) => {
+  let framesInternal = state.get('framesInternal') || Immutable.Map()
+  state.get('frames').slice(fromIndex).forEach((frame, idx) => {
+    const realIndex = idx + fromIndex
+    if (frame.get('key')) {
+      framesInternal = framesInternal.setIn(['index', frame.get('key').toString()], realIndex)
+    }
+    if (frame.get('tabId') !== -1) {
+      framesInternal = framesInternal.setIn(['tabIndex', frame.get('tabId').toString()], realIndex)
+    }
+
+    appActions.tabIndexChanged(frame.get('tabId'), realIndex)
+  })
+
+  return state.set('framesInternal', framesInternal)
+}
+
+const isValidClosedFrame = (frame) => {
+  const location = frame.get('location')
+  if (location && (location.indexOf('about:newtab') !== -1 || location.indexOf('about:blank') !== -1)) {
+    return false
+  }
+  return !frame.get('isPrivate')
+}
+
+const getTabPageCount = (state) => {
+  const frames = getNonPinnedFrames(state) || Immutable.List()
+  const tabsPerPage = Number(getSetting(settings.TABS_PER_PAGE))
+
+  return Math.ceil(frames.size / tabsPerPage)
+}
+
+const getPreviewFrameKey = (state) => {
+  return state.get('previewFrameKey')
+}
+
+const setPreviewTabPageIndex = (state, index, immediate = false) => {
+  clearTimeout(tabPageHoverTimeout)
+  const previewTabs = getSetting(settings.SHOW_TAB_PREVIEWS)
+  const isActive = state.getIn(['ui', 'tabs', 'tabPageIndex']) === index
+  let newTabPageIndex = index
+
+  if (!previewTabs || state.getIn(['ui', 'tabs', 'hoverTabPageIndex']) !== index || isActive) {
+    newTabPageIndex = null
+  }
+
+  if (!immediate) {
+    // if there is an existing preview tab page index then we're already in preview mode
+    // we use actions here because that is the only way to delay updating the state
+    const previewMode = state.getIn(['ui', 'tabs', 'previewTabPageIndex']) != null
+    if (previewMode && newTabPageIndex == null) {
+      // add a small delay when we are clearing the preview frame key so we don't lose
+      // previewMode if the user mouses over another tab - see below
+      tabPageHoverTimeout = setTimeout(windowActions.setPreviewTabPageIndex.bind(null, null), 200)
+      return state
+    }
+
+    if (!previewMode) {
+      // If user isn't in previewMode so we add a bit of delay to avoid tab from flashing out
+      // as reported here: https://github.com/brave/browser-laptop/issues/1434
+      // using an action here because that is the only way we can do a delayed state update
+      tabPageHoverTimeout = setTimeout(windowActions.setPreviewTabPageIndex.bind(null, newTabPageIndex), 200)
+      return state
+    }
+  }
+
+  return state.setIn(['ui', 'tabs', 'previewTabPageIndex'], newTabPageIndex)
+}
+
+const setPreviewFrameKey = (state, frameKey, immediate = false) => {
+  clearTimeout(tabHoverTimeout)
+  const frame = getFrameByKey(state, frameKey)
+  const isActive = isFrameKeyActive(state, frameKey)
+  const previewTabs = getSetting(settings.SHOW_TAB_PREVIEWS)
+  const hoverState = getTabHoverState(state, frameKey)
+  let newPreviewFrameKey = frameKey
+
+  if (!previewTabs || frame == null || !hoverState || isActive) {
+    newPreviewFrameKey = null
+  }
+
+  if (!immediate) {
+    // if there is an existing preview frame key then we're already in preview mode
+    // we use actions here because that is the only way to delay updating the state
+    const previewMode = getPreviewFrameKey(state) != null
+    if (previewMode && newPreviewFrameKey == null) {
+      // add a small delay when we are clearing the preview frame key so we don't lose
+      // previewMode if the user mouses over another tab - see below
+      tabHoverTimeout = setTimeout(windowActions.setPreviewFrame.bind(null, null), 200)
+      return state
+    }
+
+    if (!previewMode) {
+      // If user isn't in previewMode so we add a bit of delay to avoid tab from flashing out
+      // as reported here: https://github.com/brave/browser-laptop/issues/1434
+      // using an action here because that is the only way we can do a delayed state update
+      tabHoverTimeout = setTimeout(windowActions.setPreviewFrame.bind(null, newPreviewFrameKey), 200)
+      return state
+    }
+  }
+
+  const index = frame ? getFrameTabPageIndex(state, frame.get('tabId')) : -1
+  if (index !== -1) {
+    if (index !== state.getIn(['ui', 'tabs', 'tabPageIndex'])) {
+      state = state.setIn(['ui', 'tabs', 'previewTabPageIndex'], index)
+    } else {
+      state = state.deleteIn(['ui', 'tabs', 'previewTabPageIndex'])
+    }
+  }
+  return state.set('previewFrameKey', newPreviewFrameKey)
+}
+
+const setTabPageHoverState = (state, tabPageIndex, hoverState) => {
+  const currentHoverIndex = state.getIn(['ui', 'tabs', 'hoverTabPageIndex'])
+  if (!hoverState && currentHoverIndex === tabPageIndex) {
+    state = state.setIn(['ui', 'tabs', 'hoverTabPageIndex'], null)
+  } else if (hoverState) {
+    state = state.setIn(['ui', 'tabs', 'hoverTabPageIndex'], tabPageIndex)
+  }
+  state = setPreviewTabPageIndex(state, tabPageIndex)
+  return state
+}
+
+/**
+ * Checks if the current tab index is being hovered
+ * @param state {Object} - Application state
+ * @param frameKey {Number} - The current tab's frameKey
+ * @return Boolean - wheter or not hoverState is true
+ */
+const getTabHoverState = (state, frameKey) => {
+  const index = getFrameIndex(state, frameKey)
+  return getHoverTabIndex(state) === index
+}
+
+/**
+ * Gets the hovered tab index state
+ * This check will return null if no tab is being hovered
+ * and is used getTabHoverState to check if current index is being hovered.
+ * If the method to apply for does not know the right index
+ * this should be used instead of getTabHoverState
+ * @param state {Object} - Application state
+ * @return Immutable top level application state for hoverTabIndex
+ */
+const getHoverTabIndex = (state) => {
+  return state.getIn(['ui', 'tabs', 'hoverTabIndex'])
+}
+
+/**
+ * Sets the hover state for current tab index in top level state
+ * @param state {Object} - Application state
+ * @param frameKey {Number} - The current tab's frameKey
+ * @param hoverState {Boolean} - True if the current tab is being hovered.
+ * @return Immutable top level application state for hoverTabIndex
+ */
+const setHoverTabIndex = (state, frameKey, hoverState) => {
+  const frameIndex = getFrameIndex(state, frameKey)
+  if (!hoverState) {
+    state = state.setIn(['ui', 'tabs', 'hoverTabIndex'], null)
+    return state
+  }
+  return state.setIn(['ui', 'tabs', 'hoverTabIndex'], frameIndex)
+}
+
+/**
+ * Gets values from the window setTabHoverState action from the store
+ * and is used to apply both hoverState and previewFrameKey
+ * @param state {Object} - Application state
+ * @param frameKey {Number} - The current tab's frameKey
+ * @param hoverState {Boolean} - True if the current tab is being hovered.
+ * @return Immutable top level application state for hoverTabIndex
+ */
+
+const setTabHoverState = (state, frameKey, hoverState) => {
+  const frameIndex = getFrameIndex(state, frameKey)
+  if (frameIndex !== -1) {
+    state = setHoverTabIndex(state, frameKey, hoverState)
+    state = setPreviewFrameKey(state, frameKey)
+  }
+  return state
+}
+
 module.exports = {
+  setTabPageHoverState,
+  setPreviewTabPageIndex,
+  getTabHoverState,
+  setTabHoverState,
+  setPreviewFrameKey,
+  getPreviewFrameKey,
+  deleteTabInternalIndex,
+  deleteFrameInternalIndex,
+  updateFramesInternalIndex,
   query,
   find,
   isAncestorFrameKey,
   isFrameKeyActive,
+  isFrameSecure,
+  isFrameLoading,
+  startLoadTime,
+  endLoadTime,
+  getHistory,
   isFrameKeyPinned,
+  getNonPinnedFrameCount,
+  isPrivatePartition,
   isSessionPartition,
+  getFrames,
+  getSortedFrames,
+  getPinnedFrames,
+  getNonPinnedFrames,
   getFrameIndex,
-  getFrameDisplayIndex,
   getActiveFrameIndex,
-  getActiveFrameDisplayIndex,
+  getActiveFrameTabId,
   getFrameByIndex,
   getFrameByDisplayIndex,
   getFrameByKey,
   getFrameByTabId,
-  getActiveFrame,
-  setActiveFrameDisplayIndex,
-  setActiveFrameIndex,
+  getIndexByTabId,
+  getPartitionNumber,
+  setFrameLastAccessedTime,
   setActiveFrameKey,
-  makeNextFrameActive,
-  makePrevFrameActive,
-  getFramePropValue,
-  getFramePropPath,
-  findIndexForFrameKey,
+  getActiveFrame,
+  getNextFrame,
+  getPreviousFrame,
   findDisplayIndexForFrameKey,
-  getFramePropsIndex,
   getFrameKeysByDisplayIndex,
   getPartition,
-  cloneFrame,
+  getPartitionFromNumber,
   addFrame,
-  undoCloseFrame,
   removeFrame,
-  removeOtherFrames,
-  tabFromFrame,
-  getFrameTabPageIndex
+  frameOptsFromFrame,
+  getFrameKeyByTabId,
+  getFrameTabPageIndex,
+  frameStatePath,
+  activeFrameStatePath,
+  getLastCommittedURL,
+  onFindBarHide,
+  getTotalBlocks,
+  isPinned,
+  updateTabPageIndex,
+  isValidClosedFrame,
+  getTabPageCount,
+  getSortedFrameKeys,
+  frameStatePathByTabId
 }

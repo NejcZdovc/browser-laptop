@@ -5,7 +5,7 @@
 const Immutable = require('immutable')
 
 module.exports.hasDragData = (dataTransfer, dragType) => {
-  return !!dataTransfer.getData(`application/x-brave-${dragType}`)
+  return dataTransfer.types.includes(`application/x-brave-${dragType}`)
 }
 
 module.exports.getDragData = (dataTransfer, dragType) => {
@@ -23,10 +23,10 @@ module.exports.setupDataTransferURL = (dataTransfer, location, title) => {
 }
 
 module.exports.setupDataTransferBraveData = (dataTransfer, dragType, data) => {
-  dataTransfer.setData(`application/x-brave-${dragType}`, JSON.stringify(data.toJS()))
+  dataTransfer.setData(`application/x-brave-${dragType}`, JSON.stringify(data))
 }
 
 module.exports.shouldPrependVerticalItem = (target, clientY) => {
   const boundingRect = target.getBoundingClientRect()
-  return clientY < boundingRect.top + (boundingRect.bottom - boundingRect.top) / 2
+  return clientY < boundingRect.top + ((boundingRect.bottom - boundingRect.top) / 2)
 }

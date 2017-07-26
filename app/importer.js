@@ -5,11 +5,11 @@
 'strict mode'
 
 const electron = require('electron')
+const app = electron.app
 const importer = electron.importer
 const dialog = electron.dialog
 const BrowserWindow = electron.BrowserWindow
 const session = electron.session
-const Immutable = require('immutable')
 const siteUtil = require('../js/state/siteUtil')
 const AppStore = require('../js/stores/appStore')
 const siteTags = require('../js/constants/siteTags')
@@ -17,21 +17,20 @@ const appActions = require('../js/actions/appActions')
 const messages = require('../js/constants/messages')
 const settings = require('../js/constants/settings')
 const getSetting = require('../js/settings').getSetting
-const path = require('path')
 const locale = require('./locale')
+const tabMessageBox = require('./browser/tabMessageBox')
+const {makeImmutable} = require('./common/state/immutableUtil')
+const tabState = require('./common/state/tabState')
 
-var isMergeFavorites = false
 var isImportingBookmarks = false
 var hasBookmarks
+var importedSites
 
 exports.init = () => {
   importer.initialize()
 }
 
 exports.importData = (selected) => {
-  if (selected.get('mergeFavorites')) {
-    isMergeFavorites = true
-  }
   if (selected.get('favorites')) {
     isImportingBookmarks = true
     const sites = AppStore.getState().get('sites')
@@ -46,9 +45,6 @@ exports.importData = (selected) => {
 
 exports.importHTML = (selected) => {
   isImportingBookmarks = true
-  if (selected.get('mergeFavorites')) {
-    isMergeFavorites = true
-  }
   const sites = AppStore.getState().get('sites')
   hasBookmarks = sites.find(
     (site) => siteUtil.isBookmark(site) || siteUtil.isFolder(site)
@@ -67,14 +63,10 @@ exports.importHTML = (selected) => {
 }
 
 importer.on('update-supported-browsers', (e, detail) => {
-  isMergeFavorites = false
   isImportingBookmarks = false
   if (BrowserWindow.getFocusedWindow()) {
     BrowserWindow.getFocusedWindow().webContents.send(messages.IMPORTER_LIST, detail)
   }
-})
-
-importer.on('add-password-form', (e, detail) => {
 })
 
 importer.on('add-history-page', (e, history, visitSource) => {
@@ -87,7 +79,7 @@ importer.on('add-history-page', (e, history, visitSource) => {
     }
     sites.push(site)
   }
-  appActions.addSite(Immutable.fromJS(sites))
+  appActions.addSite(makeImmutable(sites))
 })
 
 importer.on('add-homepage', (e, detail) => {
@@ -122,27 +114,15 @@ importer.on('add-bookmarks', (e, bookmarks, topLevelFolder) => {
   let pathMap = {}
   let sites = []
   let topLevelFolderId = 0
-  if (!isMergeFavorites) {
-    topLevelFolderId = nextFolderIdObject.id++
-    sites.push({
-      customTitle: topLevelFolder,
-      folderId: topLevelFolderId,
-      parentFolderId: 0,
-      lastAccessedTime: 0,
-      creationTime: (new Date()).getTime(),
-      tags: [siteTags.BOOKMARK_FOLDER]
-    })
-  } else {
-    // Merge into existing bookmark toolbar
-    pathMap[topLevelFolder] = topLevelFolderId
-    pathMap['Bookmarks Toolbar'] = 0 // Firefox
-    pathMap['Bookmarks Bar'] = 0 // Chrome on mac
-    pathMap['Other Bookmarks'] = -1 // Chrome on mac
-    pathMap['Bookmarks bar'] = 0 // Chrome on win/linux
-    pathMap['Other bookmarks'] = -1 // Chrome on win/linux
-    pathMap['Bookmark Bar'] = 0 // Safari
-    pathMap['Links'] = 0 // Edge, IE
-  }
+  topLevelFolderId = nextFolderIdObject.id++
+  sites.push({
+    customTitle: siteUtil.getNextFolderName(AppStore.getState().get('sites'), topLevelFolder),
+    folderId: topLevelFolderId,
+    parentFolderId: 0,
+    lastAccessedTime: 0,
+    creationTime: (new Date()).getTime(),
+    tags: [siteTags.BOOKMARK_FOLDER]
+  })
   for (let i = 0; i < bookmarks.length; ++i) {
     let path = bookmarks[i].path
     let parentFolderId = getParentFolderId(path, pathMap, sites, topLevelFolderId, nextFolderIdObject)
@@ -171,7 +151,8 @@ importer.on('add-bookmarks', (e, bookmarks, topLevelFolder) => {
       sites.push(site)
     }
   }
-  appActions.addSite(Immutable.fromJS(sites))
+  importedSites = makeImmutable(sites)
+  appActions.addSite(makeImmutable(sites))
 })
 
 importer.on('add-favicons', (e, detail) => {
@@ -187,7 +168,7 @@ importer.on('add-favicons', (e, detail) => {
       }
     }
   })
-  let sites = AppStore.getState().get('sites')
+  let sites = importedSites
   sites = sites.map((site) => {
     if ((site.get('favicon') === undefined && site.get('location') !== undefined &&
       faviconMap[site.get('location')] !== undefined) ||
@@ -226,35 +207,33 @@ importer.on('add-cookies', (e, cookies) => {
   }
 })
 
+const getActiveTabId = () => {
+  return tabState.getActiveTabId(AppStore.getState())
+}
+
 const showImportWarning = function () {
-  // The timeout is in case there's a call just after the modal to hide the menu.
-  // showMessageBox is a modal and blocks everything otherwise, so menu would remain open
-  // while the dialog is displayed.
-  setTimeout(() => {
-    dialog.showMessageBox({
-      title: 'Brave',
+  const tabId = getActiveTabId()
+  if (tabId) {
+    tabMessageBox.show(tabId, {
       message: `${locale.translation('closeFirefoxWarning')}`,
-      icon: path.join(__dirname, '..', 'app', 'extensions', 'brave', 'img', 'braveAbout.png'),
+      title: 'Brave',
       buttons: [locale.translation('closeFirefoxWarningOk')]
     })
-  }, 50)
+  }
 }
 
 const showImportSuccess = function () {
-  // The timeout is in case there's a call just after the modal to hide the menu.
-  // showMessageBox is a modal and blocks everything otherwise, so menu would remain open
-  // while the dialog is displayed.
-  setTimeout(() => {
-    dialog.showMessageBox({
-      title: 'Brave',
+  const tabId = getActiveTabId()
+  if (tabId) {
+    tabMessageBox.show(tabId, {
       message: `${locale.translation('importSuccess')}`,
-      icon: path.join(__dirname, '..', 'app', 'extensions', 'brave', 'img', 'braveAbout.png'),
+      title: 'Brave',
       buttons: [locale.translation('importSuccessOk')]
     })
-  }, 50)
+  }
 }
 
-importer.on('show-warning-dialog', (e) => {
+app.on('show-warning-dialog', (e) => {
   showImportWarning()
 })
 

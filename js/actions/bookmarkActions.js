@@ -4,43 +4,61 @@
 
 'use strict'
 
+const Immutable = require('immutable')
 const siteUtil = require('../state/siteUtil')
+const appActions = require('./appActions')
 const windowActions = require('./windowActions')
 const eventUtil = require('../lib/eventUtil')
+const appStoreRenderer = require('../stores/appStoreRenderer')
 const {SWITCH_TO_NEW_TABS} = require('../constants/settings')
 const getSetting = require('../settings').getSetting
 
 const bookmarkActions = {
-  openBookmarksInFolder: function (allBookmarkItems, folderDetail) {
+  openBookmarksInFolder: function (folderDetail) {
+    const allBookmarkItems = siteUtil.getBookmarks(appStoreRenderer.state.get('sites'))
     // We have a middle clicked folder
     const bookmarks = allBookmarkItems
       .filter((bookmark) => (bookmark.get('parentFolderId') || 0) === (folderDetail.get('folderId') || 0) && siteUtil.isBookmark(bookmark))
 
     // Only load the first 25 tabs as loaded
     bookmarks
-      .forEach((bookmark, i) =>
-        windowActions.newFrame(Object.assign(siteUtil.toFrameOpts(bookmark), {unloaded: i > 25}), getSetting(SWITCH_TO_NEW_TABS)))
+      .forEach((bookmark, i) => {
+        if (i <= 25) {
+          appActions.createTabRequested(
+            Object.assign(siteUtil.toCreateProperties(bookmark), {
+              active: false
+            }), getSetting(SWITCH_TO_NEW_TABS))
+        } else {
+          appActions.createTabRequested({
+            location: bookmark.get('location'),
+            partitionNumber: bookmark.get('partitionNumber'),
+            discarded: true
+          }, false)
+        }
+      })
   },
 
   /**
    * Performs an action based on the passed in event to the bookmark item
    * @return true if an action was performed
    */
-  clickBookmarkItem: function (allBookmarkItems, bookmarkItem, activeFrame, e) {
+  clickBookmarkItem: function (bookmarkKey, tabId, e) {
+    const bookmarkItem = appStoreRenderer.state.getIn(['sites', bookmarkKey], Immutable.Map())
     const isFolder = siteUtil.isFolder(bookmarkItem)
     if (!isFolder) {
       if (eventUtil.isForSecondaryAction(e)) {
-        windowActions.newFrame({
-          location: bookmarkItem.get('location'),
-          partitionNumber: bookmarkItem && bookmarkItem.get && bookmarkItem.get('partitionNumber') || undefined
-        }, !!e.shiftKey || getSetting(SWITCH_TO_NEW_TABS))
+        appActions.createTabRequested({
+          url: bookmarkItem.get('location'),
+          partitionNumber: (bookmarkItem && bookmarkItem.get && bookmarkItem.get('partitionNumber')) || undefined,
+          active: !!e.shiftKey || getSetting(SWITCH_TO_NEW_TABS)
+        })
       } else {
-        windowActions.loadUrl(activeFrame, bookmarkItem.get('location'))
+        appActions.loadURLRequested(tabId, bookmarkItem.get('location'))
       }
       windowActions.setContextMenuDetail()
       return true
     } else if (eventUtil.isForSecondaryAction(e)) {
-      this.openBookmarksInFolder(allBookmarkItems, bookmarkItem)
+      this.openBookmarksInFolder(bookmarkItem)
       windowActions.setContextMenuDetail()
       return true
     }

@@ -1,17 +1,22 @@
 const prettierBytes = require('prettier-bytes')
 const React = require('react')
-const SortableTable = require('../../components/sortableTable')
+const SortableTable = require('../../../app/renderer/components/common/sortableTable')
+
+const {css} = require('aphrodite/no-important')
+const commonStyles = require('../../../app/renderer/components/styles/commonStyles')
+
+const {AboutPageSectionSubTitle} = require('../../../app/renderer/components/common/sectionTitle')
 
 class TorrentFileList extends React.Component {
   render () {
-    const torrent = this.props.torrent
+    const { torrent, stateOwner } = this.props
     const files = torrent && torrent.files
 
     let content
     if (files == null) {
-      content = <div data-l10n-id='missingFilesList' />
+      content = <div className={css(commonStyles.userSelectNone)} data-l10n-id='missingFilesList' />
     } else if (files.length === 0) {
-      content = <div data-l10n-id='loadingFilesList' />
+      content = <div className={css(commonStyles.userSelectNone)} data-l10n-id='loadingFilesList' />
     } else {
       content = [
         <SortableTable
@@ -19,7 +24,7 @@ class TorrentFileList extends React.Component {
           defaultHeading='num'
           defaultHeadingSortOrder='asc'
           rows={files.map((file, i) => [
-            String(i + 1),
+            i + 1,
             {cell: this.renderFileLink(file, false)},
             {cell: this.renderFileLink(file, true)},
             prettierBytes(file.length)
@@ -27,31 +32,34 @@ class TorrentFileList extends React.Component {
           rowObjects={files}
           columnClassNames={['num', 'name', 'downloadFile', 'size']}
           addHoverClass
-          stateOwner={this.props.stateOwner} />
+          stateOwner={stateOwner} />
       ]
     }
 
     return (
-      <div className='torrentFileList'>
-        <div data-l10n-id='files' className='sectionTitle' />
+      <div>
+        <AboutPageSectionSubTitle data-l10n-id='files' />
         {content}
       </div>
     )
   }
 
   renderFileLink (file, isDownload) {
-    const { torrent, torrentID } = this.props
+    const { torrentId, torrent, serverUrl } = this.props
     const ix = torrent.files.indexOf(file)
     if (isDownload) {
-      if (torrent.serverURL) {
-        const httpURL = torrent.serverURL + '/' + ix
-        return <a href={httpURL} download={file.name}>⇩</a>
+      if (serverUrl) {
+        const httpURL = serverUrl + '/' + ix
+        return <a className={css(commonStyles.userSelect)} href={httpURL} download={file.name}>⇩</a>
       } else {
         return <div /> // No download links until the server is ready
       }
     } else {
-      const magnetURL = torrentID + '&ix=' + ix
-      return <a href={magnetURL}>{file.name}</a>
+      const suffix = /^https?:/.test(torrentId)
+        ? '#ix=' + ix
+        : '&ix=' + ix
+      const href = torrentId + suffix
+      return <a className={css(commonStyles.userSelect)} href={href}>{file.name}</a>
     }
   }
 }

@@ -1,11 +1,15 @@
+/* globals devTools */
 var Application = require('spectron').Application
 var chai = require('chai')
+const Immutable = require('immutable')
+const {activeWebview, navigator, titleBar, urlInput} = require('./selectors')
 require('./coMocha')
+const series = require('async/series')
 
 const path = require('path')
-const fs = require('fs')
+const fs = require('fs-extra')
 const os = require('os')
-const {getTargetAboutUrl, isSourceAboutUrl} = require('../../js/lib/appUrlUtil')
+const {getTargetAboutUrl, isSourceAboutUrl, getBraveExtIndexHTML} = require('../../js/lib/appUrlUtil')
 
 var chaiAsPromised = require('chai-as-promised')
 chai.should()
@@ -14,10 +18,10 @@ chai.use(chaiAsPromised)
 const Server = require('./server')
 
 // toggle me for more verbose logs! :)
-const logVerboseEnabled = false
-const logVerbose = (string) => {
+const logVerboseEnabled = process.env.BRAVE_TEST_ALL_LOGS || process.env.BRAVE_TEST_COMMAND_LOGS
+const logVerbose = (string, ...rest) => {
   if (logVerboseEnabled) {
-    console.log(string)
+    console.log(string, ...rest)
   }
 }
 
@@ -47,11 +51,37 @@ const rmDir = (dirPath) => {
     }
   }
   try {
-    fs.rmdirSync(dirPath)
+    fs.removeSync(dirPath)
   } catch (e) {
     console.error(e)
-    return
   }
+}
+
+const handleTypedText = (prevValue, text) => {
+  if (typeof text === 'string') {
+    return `${prevValue}${text}`
+  } else {
+    for (let val of text) {
+      prevValue = executeType(prevValue, val)
+    }
+
+    return prevValue
+  }
+}
+
+const executeType = (current, next) => {
+  switch (next) {
+    case exports.keys.BACKSPACE:
+      current = current.slice(0, -1)
+      break
+    case exports.keys.END:
+      break
+    default:
+      current += next
+      break
+  }
+
+  return current
 }
 
 var promiseMapSeries = function (array, iterator) {
@@ -78,12 +108,20 @@ var exports = {
     SHIFT: '\ue008',
     BACKSPACE: '\ue003',
     DELETE: '\ue017',
-    DOWN: '\ue015'
+    LEFT: '\ue012',
+    RIGHT: '\ue014',
+    DOWN: '\ue015',
+    UP: '\ue013',
+    PAGEDOWN: '\uE00F',
+    END: '\uE010',
+    TAB: '\ue004',
+    NULL: '\uE000'
   },
 
   defaultTimeout: 10000,
+  defaultInterval: 100,
 
-  browserWindowUrl: 'file://' + path.resolve(__dirname, '..', '..') + '/app/extensions/brave/index.html',
+  browserWindowUrl: getBraveExtIndexHTML(),
   newTabUrl: 'chrome-extension://mnojpmjdmbbfmejpflffifhffcmidifd/about-newtab.html',
   fixtureUrl: function (filename) {
     return 'file://' + path.resolve(__dirname, '..', 'fixtures', filename)
@@ -91,6 +129,10 @@ var exports = {
 
   beforeAllServerSetup: function (context) {
     context.beforeAll(function (done) {
+      if (exports.server) {
+        return
+      }
+
       Server.create(`${__dirname}/../fixtures/`, (err, _server) => {
         if (err) {
           console.log(err.stack)
@@ -98,6 +140,15 @@ var exports = {
         exports.server = _server
         done()
       })
+    })
+
+    context.afterAll(function () {
+      if (!exports.server) {
+        return
+      }
+
+      exports.server.stop()
+      exports.server = null
     })
   },
 
@@ -112,18 +163,14 @@ var exports = {
       exports.addCommands.call(this)
     })
 
+    context.afterAll(function () {
+      return exports.stopApp.call(this)
+    })
+
     exports.beforeAllServerSetup(context)
 
     context.beforeEach(function () {
       chaiAsPromised.transferPromiseness = this.app.client.transferPromiseness
-    })
-
-    context.afterAll(function () {
-      exports.server.stop()
-    })
-
-    context.afterAll(function () {
-      return exports.stopApp.call(this)
     })
   },
 
@@ -146,22 +193,60 @@ var exports = {
     })
 
     context.afterEach(function () {
-      return exports.stopApp.call(this)
+      return exports.stopApp.call(this, context.cleanSessionStoreAfterEach)
     })
   },
 
   addCommands: function () {
+    const app = this.app
+    const initialized = []
+
     this.app.client.addCommand('ipcSend', function (message, ...param) {
+      logVerbose('ipcSend(' + message + ', "' + param + '")')
       return this.execute(function (message, ...param) {
-        return require('electron').remote.getCurrentWindow().webContents.send(message, ...param)
+        return devTools('electron').remote.getCurrentWindow().webContents.send(message, ...param)
       }, message, ...param).then((response) => response.value)
     })
 
+    this.app.client.addCommand('maximize', function () {
+      logVerbose('maximize()')
+      return this.execute(function () {
+        return devTools('electron').remote.getCurrentWindow().maximize()
+      }).then((response) => response.value)
+    })
+
+    this.app.client.addCommand('unmaximize', function () {
+      logVerbose('unmaximize()')
+      return this.execute(function () {
+        return devTools('electron').remote.getCurrentWindow().unmaximize()
+      }).then((response) => response.value)
+    })
+
     this.app.client.addCommand('ipcSendRenderer', function (message, ...param) {
+      logVerbose('ipcSendRenderer(' + message + ')')
       return this.execute(function (message, ...param) {
-        return require('electron').ipcRenderer.send(message, ...param)
+        return devTools('electron').ipcRenderer.send(message, ...param)
       }, message, ...param).then((response) => response.value)
     })
+
+    this.app.client.addCommand('ipcSendRendererSync', function (message, ...param) {
+      logVerbose('ipcSendRenderer(' + message + ')')
+      return this.execute(function (message, ...param) {
+        return devTools('electron').ipcRenderer.sendSync(message, ...param)
+      }, message, ...param)
+    })
+
+    var windowOrig = this.app.client.window
+    Object.getPrototypeOf(this.app.client).window = function (handle) {
+      if (!initialized.includes(handle)) {
+        initialized.push(handle)
+        return windowOrig.apply(this, [handle]).call(() => {
+          return app.api.initialize().then(() => true, () => true)
+        }).then(() => windowOrig.apply(this, [handle]))
+      } else {
+        return windowOrig.apply(this, [handle])
+      }
+    }
 
     var windowHandlesOrig = this.app.client.windowHandles
     Object.getPrototypeOf(this.app.client).windowHandles = function () {
@@ -188,19 +273,23 @@ var exports = {
         })
     }
 
-    this.app.client.addCommand('tabHandles', function (index) {
+    this.app.client.addCommand('tabHandles', function () {
+      logVerbose('tabHandles()')
       return windowHandlesOrig.apply(this)
         .then(function (response) {
           var handles = response.value
           return promiseMapSeries(handles, (handle) => {
-            return this.window(handle).getUrl()
+            return this.window(handle).getUrl().catch((err) => {
+              console.error('Error retrieving window handle ' + handle, err)
+              return ''
+            })
           }).then((urls) => {
             var newHandles = []
             for (var i = 0; i < urls.length; i++) {
               // ignore extension urls unless they are "about" pages
               if (!(urls[i].startsWith('chrome-extension') && !urls[i].match(/about-.*\.html(#.*)?$/)) &&
                   // ignore window urls
-                  !urls[i].startsWith('file:')) {
+                  !urls[i].startsWith('chrome://brave')) {
                 newHandles.push(handles[i])
               }
             }
@@ -219,6 +308,7 @@ var exports = {
     })
 
     this.app.client.addCommand('getTabCount', function () {
+      logVerbose('getTabCount()')
       return this.tabHandles().then((response) => response.value).then(function (handles) {
         logVerbose('getTabCount() => ' + handles.length)
         return handles.length
@@ -226,8 +316,8 @@ var exports = {
     })
 
     this.app.client.addCommand('waitForBrowserWindow', function () {
+      logVerbose('waitForBrowserWindow()')
       return this.waitUntil(function () {
-        logVerbose('waitForBrowserWindow()')
         return this.windowByUrl(exports.browserWindowUrl).then((response) => {
           logVerbose('waitForBrowserWindow() => ' + JSON.stringify(response))
           return response
@@ -235,12 +325,28 @@ var exports = {
           logVerbose('waitForBrowserWindow() => false')
           return false
         })
-      })
+      }, 5000, null, 100)
+    })
+
+    this.app.client.addCommand('activateTitleMode', function () {
+      logVerbose('activateTitleMode()')
+      return this
+        .setMouseInTitlebar(false)
+        .moveToObject(activeWebview)
+        .waitForVisible(titleBar)
+    })
+
+    this.app.client.addCommand('activateURLMode', function () {
+      logVerbose('activateURLMode()')
+      return this
+        .setMouseInTitlebar(true)
+        .moveToObject(navigator)
+        .waitForVisible(urlInput)
     })
 
     this.app.client.addCommand('waitForUrl', function (url) {
+      logVerbose('waitForUrl("' + url + '")')
       return this.waitUntil(function () {
-        logVerbose('waitForUrl("' + url + '")')
         return this.tabByUrl(url).then((response) => {
           logVerbose('tabByUrl("' + url + '") => ' + JSON.stringify(response))
           return response
@@ -248,22 +354,82 @@ var exports = {
           logVerbose('tabByUrl("' + url + '") => false')
           return false
         })
-      })
+      }, 5000, null, 100)
     })
 
     this.app.client.addCommand('waitForSelectedText', function (text) {
+      logVerbose('waitForSelectedText("' + text + '")')
       return this.waitUntil(function () {
         return this.getSelectedText(text).then((value) => { return value === text })
-      })
+      }, 5000, null, 100)
+    })
+
+    this.app.client.addCommand('waitForTextValue', function (selector, text) {
+      logVerbose('waitForSelectedText("' + selector + '", "' + text + '")')
+      return this
+        .waitForVisible(selector)
+        .waitUntil(function () {
+          return this.getText(selector).then((value) => {
+            logVerbose('waitForTextValue("' + selector + '", ' + text + ') => ' + value)
+            return value === text
+          })
+        }, 5000, null, 100)
     })
 
     this.app.client.addCommand('waitForTabCount', function (tabCount) {
       logVerbose('waitForTabCount(' + tabCount + ')')
       return this.waitUntil(function () {
         return this.getTabCount().then((count) => {
+          logVerbose(`waitForTabCount(${tabCount}) => ${count}`)
           return count === tabCount
         })
+      }, 5000, null, 100)
+    })
+
+    this.app.client.addCommand('waitForWindowCount', function (windowCount) {
+      logVerbose('waitForWindowCount(' + windowCount + ')')
+      return this.waitUntil(function () {
+        return this.getWindowCount().then((count) => {
+          return count === windowCount
+        })
       })
+    })
+
+    this.app.client.addCommand('waitForAddressCount', function (addressCount) {
+      logVerbose('waitForAddressCount(' + addressCount + ')')
+      return this.waitUntil(function () {
+        return this.getAppState().then((val) => {
+          const ret = (val.value && val.value && val.value.autofill &&
+            val.value.autofill.addresses && val.value.autofill.addresses.guid.length) || 0
+          logVerbose('waitForAddressCount(' + addressCount + ') => ' + ret)
+          return ret
+        })
+      }, 5000, null, 100)
+    })
+
+    this.app.client.addCommand('waitForTab', function (props) {
+      logVerbose('waitForTab(' + JSON.stringify(props) + ')')
+      return this.waitUntil(function () {
+        return this.getAppState().then((val) => {
+          const tabs = val && val.value && val.value.tabs
+          if (!tabs) {
+            return false
+          }
+          return tabs.reduce((tabAcc, tab) =>
+            tabAcc || Object.keys(props).reduce((acc, prop) =>
+              acc && tab[prop] === props[prop], true), false)
+        })
+      }, 5000, null, 100)
+    })
+
+    this.app.client.addCommand('waitForElementCount', function (selector, count) {
+      logVerbose('waitForElementCount("' + selector + '", ' + count + ')')
+      return this.waitUntil(function () {
+        return this.elements(selector).then((res) => {
+          logVerbose('waitForElementCount("' + selector + '", ' + count + ') => ' + res.value.length)
+          return res.value.length === count
+        })
+      }, 5000, null, 100)
     })
 
     this.app.client.addCommand('waitForResourceReady', function (resourceName) {
@@ -274,6 +440,59 @@ var exports = {
           return val.value[resourceName] && val.value[resourceName].ready
         })
       }, 20000)
+    })
+
+    this.app.client.addCommand('waitForSettingValue', function (setting, value) {
+      logVerbose('waitForSettingValue(' + setting + ', ' + value + ')')
+      return this.waitUntil(function () {
+        return this.getAppState().then((val) => {
+          logVerbose('waitForSettingValue("' + setting + ', ' + value + '") => ' + val.value && val.value.settings && val.value.settings[setting])
+          return val.value && val.value.settings && val.value.settings[setting] === value
+        })
+      }, 5000, null, 100)
+    })
+
+    this.app.client.addCommand('waitForSiteEntry', function (location, waitForTitle = true) {
+      logVerbose('waitForSiteEntry("' + location + '", "' + waitForTitle + '")')
+      return this.waitUntil(function () {
+        return this.getAppState().then((val) => {
+          const ret = val.value && val.value.sites && Array.from(Object.values(val.value.sites)).find(
+            (site) => site.location === location &&
+              (!waitForTitle || (waitForTitle && site.title)))
+          logVerbose('waitForSiteEntry("' + location + ', ' + waitForTitle + '") => ' + ret)
+          return ret
+        })
+      }, 5000, null, 100)
+    })
+
+    this.app.client.addCommand('waitForAddressEntry', function (location, waitForTitle = true) {
+      logVerbose('waitForAddressEntry("' + location + '", "' + waitForTitle + '")')
+      return this.waitUntil(function () {
+        return this.getAppState().then((val) => {
+          const ret = val.value && val.value.sites && Array.from(Object.values(val.value.sites)).find(
+            (site) => site.location === location &&
+              (!waitForTitle || (waitForTitle && site.title)))
+          logVerbose('sites:' + JSON.stringify(val.value.sites))
+          logVerbose('waitForSiteEntry("' + location + '", ' + waitForTitle + ') => ' + ret)
+          return ret
+        })
+      }, 5000, null, 100)
+    })
+
+    this.app.client.addCommand('waitForBookmarkDetail', function (location, title) {
+      logVerbose('waitForBookmarkDetail("' + location + '", "' + title + '")')
+      return this.waitUntil(function () {
+        return this.getWindowState().then((val) => {
+          const bookmarkDetailLocation = val.value && val.value.bookmarkDetail &&
+            val.value.bookmarkDetail.siteDetail && val.value.bookmarkDetail.siteDetail.location
+          const bookmarkDetailTitle = (val.value && val.value.bookmarkDetail && val.value.bookmarkDetail.siteDetail &&
+            val.value.bookmarkDetail.siteDetail.customTitle) || val.value.bookmarkDetail.siteDetail.title
+          const ret = bookmarkDetailLocation === location && bookmarkDetailTitle === title
+          logVerbose('waitForBookmarkDetail("' + location + '", "' + title + '") => ' + ret +
+            ' (bookmarkDetailLocation = ' + bookmarkDetailLocation + ', bookmarkDetailTitle = ' + bookmarkDetailTitle + ')')
+          return ret
+        })
+      }, 5000, null, 100)
     })
 
     this.app.client.addCommand('loadUrl', function (url) {
@@ -290,60 +509,166 @@ var exports = {
     })
 
     this.app.client.addCommand('getAppState', function () {
+      logVerbose('getAppState()')
       return this.execute(function () {
-        return window.appStoreRenderer.state.toJS()
+        return devTools('electron').testData.appStoreRenderer.state.toJS()
       })
     })
 
+    this.app.client.addCommand('getTabIdByIndex', function (index) {
+      logVerbose('getTabIdByIndex()')
+      return this.waitForTab({index})
+        .getAppState().then((val) => val.value.tabs[index].tabId)
+    })
+
     this.app.client.addCommand('getWindowState', function () {
+      logVerbose('getWindowState()')
       return this.execute(function () {
-        return window.windowStore.state.toJS()
+        return devTools('electron').testData.windowStore.state.toJS()
       })
     })
 
     this.app.client.addCommand('setContextMenuDetail', function () {
+      logVerbose('setContextMenuDetail()')
       return this.execute(function () {
-        return window.windowActions.setContextMenuDetail()
+        return devTools('electron').testData.windowActions.setContextMenuDetail()
       })
     })
 
+    this.app.client.addCommand('closeTabWithMouse', function () {
+      logVerbose('closeTabWithMouse()')
+      return this.execute(function () {
+        return devTools('electron').testData.windowActions.onTabClosedWithMouse()
+      })
+    })
+
+    this.app.client.addCommand('waitForInputText', function (selector, input) {
+      logVerbose('waitForInputText("' + selector + '", "' + input + '")')
+      return this
+        .waitUntil(function () {
+          return this.getValue(selector).then(function (val) {
+            let ret
+            if (input.constructor === RegExp) {
+              ret = val && val.match(input)
+            } else {
+              ret = val === input
+            }
+            logVerbose('Current val (in quotes): "' + val + '"')
+            logVerbose('waitForInputText("' + selector + '", "' + input + '") => ' + ret)
+            return ret
+          })
+        }, 5000, null, 100)
+    })
+
+    this.app.client.addCommand('setInputText', function (selector, input) {
+      logVerbose('setInputText("' + selector + '", "' + input + '")')
+      return this
+        .activateURLMode()
+        .setValue(selector, input)
+        .waitForInputText(selector, input)
+    })
+
     this.app.client.addCommand('showFindbar', function (show, key = 1) {
+      logVerbose('showFindbar("' + show + '", "' + key + '")')
       return this.execute(function (show, key) {
-        window.windowActions.setFindbarShown(Object.assign({
-          windowId: require('electron').remote.getCurrentWindow().id,
+        devTools('electron').testData.windowActions.setFindbarShown(Object.assign({
           key
         }), show !== false)
       }, show, key)
     })
 
+    this.app.client.addCommand('setMouseInTitlebar', function (mouseInTitleBar) {
+      logVerbose('showFindbar("' + mouseInTitleBar + '")')
+      return this.execute(function (mouseInTitleBar) {
+        devTools('electron').testData.windowActions.setMouseInTitlebar(mouseInTitleBar)
+      }, mouseInTitleBar)
+    })
+
     this.app.client.addCommand('openBraveMenu', function (braveMenu, braveryPanel) {
       logVerbose('openBraveMenu()')
-      return this.windowByUrl(exports.browserWindowUrl)
+      return this
+        .waitForBrowserWindow()
         .waitForVisible(braveMenu)
         .click(braveMenu)
         .waitForVisible(braveryPanel)
     })
 
-    this.app.client.addCommand('setPinned', function (location, isPinned, options = {}) {
-      return this.execute(function (location, isPinned, options) {
-        var Immutable = require('immutable')
-        window.windowActions.setPinned(Immutable.fromJS(Object.assign({
-          windowId: require('electron').remote.getCurrentWindow().id,
-          location
-        }, options)), isPinned)
-      }, location, isPinned, options)
+    this.app.client.addCommand('pinTabByIndex', function (index, isPinned) {
+      return this.waitForTab({index}).getAppState().then((val) => {
+        const tab = val.value.tabs.find((tab) => tab.index === index)
+        return this.execute(function (tabId, isPinned) {
+          devTools('appActions').tabPinned(tabId, isPinned)
+        }, tab.tabId, isPinned)
+      })
+    })
+
+    this.app.client.addCommand('stopReportingStateUpdates', function () {
+      return this.execute(function () {
+        devTools('electron').ipcRenderer.removeAllListeners('request-window-state')
+      })
+    })
+
+    this.app.client.addCommand('detachTabByIndex', function (index, windowId = -1) {
+      return this.waitForTab({index}).getWindowState().then((val) => {
+        const frame = val.value.frames[index]
+        return this.execute(function (tabId, windowId, frame) {
+          const browserOpts = { positionByMouseCursor: true }
+          devTools('appActions').tabMoved(tabId, frame, browserOpts, windowId)
+        }, frame.tabId, windowId, frame)
+      })
+    })
+
+    this.app.client.addCommand('closeTabByIndex', function (index) {
+      return this.waitForTab({index}).getAppState().then((val) => {
+        const tab = val.value.tabs.find((tab) => tab.index === index)
+        return this.execute(function (tabId) {
+          devTools('appActions').tabCloseRequested(tabId)
+        }, tab.tabId)
+      })
     })
 
     this.app.client.addCommand('ipcOn', function (message, fn) {
+      logVerbose('ipcOn("' + message + '")')
       return this.execute(function (message, fn) {
-        return require('electron').remote.getCurrentWindow().webContents.on(message, fn)
+        return devTools('electron').remote.getCurrentWindow().webContents.on(message, fn)
+      }, message, fn).then((response) => response.value)
+    })
+
+    this.app.client.addCommand('ipcOnce', function (message, fn) {
+      logVerbose('ipcOnce("' + message + '")')
+      return this.execute(function (message, fn) {
+        return devTools('electron').remote.getCurrentWindow().webContents.once(message, fn)
       }, message, fn).then((response) => response.value)
     })
 
     this.app.client.addCommand('newWindowAction', function (frameOpts, browserOpts) {
+      logVerbose('newWindowAction("' + frameOpts + '", "' + browserOpts + '")')
       return this.execute(function () {
-        return require('../../../js/actions/appActions').newWindow()
+        return devTools('appActions').newWindow()
       }, frameOpts, browserOpts).then((response) => response.value)
+    })
+
+    this.app.client.addCommand('quit', function () {
+      logVerbose('quit()')
+      return this.execute(function () {
+        return devTools('appActions').shuttingDown()
+      }).then((response) => response.value)
+    })
+
+    this.app.client.addCommand('newTab', function (createProperties = {}) {
+      return this
+        .execute(function (createProperties) {
+          return devTools('appActions').createTabRequested(createProperties)
+        }, createProperties)
+    })
+
+    this.app.client.addCommand('activateTabByIndex', function (index) {
+      return this.waitForTab({index}).getAppState().then((val) => {
+        const tab = val.value.tabs.find((tab) => tab.index === index)
+        return this.execute(function (tabId) {
+          devTools('appActions').tabActivateRequested(tabId)
+        }, tab.tabId)
+      })
     })
 
     /**
@@ -353,9 +678,33 @@ var exports = {
      * @param {string} tag - A site tag from js/constants/siteTags.js
      */
     this.app.client.addCommand('addSite', function (siteDetail, tag) {
+      logVerbose('addSite("' + siteDetail + '", "' + tag + '")')
+      let waitUrl = siteDetail.location
+      if (isSourceAboutUrl(waitUrl)) {
+        waitUrl = getTargetAboutUrl(waitUrl)
+      }
       return this.execute(function (siteDetail, tag) {
-        return require('../../../js/actions/appActions').addSite(siteDetail, tag)
+        return devTools('appActions').addSite(siteDetail, tag)
       }, siteDetail, tag).then((response) => response.value)
+      .waitForSiteEntry(waitUrl, false)
+    })
+
+    /**
+     * Adds a bookmark to the bookmarks list.
+     *
+     * @param {object} siteDetail - Properties for the siteDetail to add
+     * @param {string} tag - A site tag from js/constants/siteTags.js
+     */
+    this.app.client.addCommand('addBookmark', function (siteDetail, tag) {
+      logVerbose('addBookmark("' + siteDetail + '", "' + tag + '")')
+      let waitUrl = siteDetail.location
+      if (isSourceAboutUrl(waitUrl)) {
+        waitUrl = getTargetAboutUrl(waitUrl)
+      }
+      return this.execute(function (siteDetail, tag) {
+        return devTools('appActions').addBookmark(siteDetail, tag)
+      }, siteDetail, tag).then((response) => response.value)
+      .waitForSiteEntry(waitUrl, false)
     })
 
     /**
@@ -364,8 +713,9 @@ var exports = {
      * @param {object} siteDetail - Properties for the siteDetail to add
      */
     this.app.client.addCommand('addSiteList', function (siteDetail) {
+      logVerbose('addSiteList("' + siteDetail + '")')
       return this.execute(function (siteDetail) {
-        return require('../../../js/actions/appActions').addSite(siteDetail)
+        return devTools('appActions').addSite(siteDetail)
       }, siteDetail).then((response) => response.value)
     })
 
@@ -376,9 +726,26 @@ var exports = {
      * @param {boolean} enabled - Whether to enable or disable the resource
      */
     this.app.client.addCommand('setResourceEnabled', function (resourceName, enabled) {
+      logVerbose('setResourceEnabled("' + resourceName + '", "' + enabled + '")')
       return this.execute(function (resourceName, enabled) {
-        return require('../../../js/actions/appActions').setResourceEnabled(resourceName, enabled)
+        return devTools('appActions').setResourceEnabled(resourceName, enabled)
       }, resourceName, enabled).then((response) => response.value)
+    })
+
+    /**
+     * Clones the specified tab
+     *
+     * @param {number} index - The index of the tabId to clone
+     * @param {Object} options - options to pass to clone
+     */
+    this.app.client.addCommand('cloneTabByIndex', function (index, options) {
+      logVerbose('cloneTabByIndex("' + index + '", "' + options + '")')
+      return this.getWindowState().then((val) => {
+        const tabId = val.value.frames[index].tabId
+        return this.execute(function (tabId, options) {
+          return devTools('appActions').tabCloned(tabId, options)
+        }, tabId, options).then((response) => response.value)
+      })
     })
 
     /**
@@ -388,8 +755,9 @@ var exports = {
      * @param {string} tag - A site tag from js/constants/siteTags.js
      */
     this.app.client.addCommand('removeSite', function (siteDetail, tag) {
+      logVerbose('removeSite("' + siteDetail + '", "' + tag + '")')
       return this.execute(function (siteDetail, tag) {
-        return require('../../../js/actions/appActions').removeSite(siteDetail, tag)
+        return devTools('appActions').removeSite(siteDetail, tag)
       }, siteDetail, tag).then((response) => response.value)
     })
 
@@ -400,9 +768,23 @@ var exports = {
      * @param value - The setting value to change to
      */
     this.app.client.addCommand('changeSetting', function (key, value) {
-      return this.execute(function (key, value) {
-        return require('../../../js/actions/appActions').changeSetting(key, value)
-      }, key, value).then((response) => response.value)
+      logVerbose('changeSetting("' + key + '", "' + value + '")')
+      return this
+        .execute(function (key, value) {
+          return devTools('appActions').changeSetting(key, value)
+        }, key, value).then((response) => response.value)
+        .waitForSettingValue(key, value)
+    })
+
+    /**
+     * Sets the sync init data
+     */
+    this.app.client.addCommand('saveSyncInitData', function (seed, deviceId, lastFetchTimestamp, qr) {
+      logVerbose('saveSyncInitData("' + seed + '", "' + deviceId + '", "' + lastFetchTimestamp + '")')
+      return this
+        .execute(function (seed, deviceId, lastFetchTimestamp, qr) {
+          return devTools('appActions').saveSyncInitData(seed, deviceId, lastFetchTimestamp, qr)
+        }, seed, deviceId, lastFetchTimestamp, qr).then((response) => response.value)
     })
 
     /**
@@ -412,8 +794,9 @@ var exports = {
      * @param value - The setting value to change to
      */
     this.app.client.addCommand('changeSiteSetting', function (hostPattern, key, value) {
+      logVerbose('changeSiteSetting("' + hostPattern + '", "' + key + '", "' + value + '")')
       return this.execute(function (hostPattern, key, value) {
-        return require('../../../js/actions/appActions').changeSiteSetting(hostPattern, key, value)
+        return devTools('appActions').changeSiteSetting(hostPattern, key, value)
       }, hostPattern, key, value).then((response) => response.value)
     })
 
@@ -422,31 +805,36 @@ var exports = {
      *
      * @param {object} clearDataDetail - the options to use for clearing
      */
-    this.app.client.addCommand('clearAppData', function (clearDataDetail) {
-      return this.execute(function (clearDataDetail) {
-        return require('../../../js/actions/appActions').clearAppData(clearDataDetail)
-      }, clearDataDetail).then((response) => response.value)
+    this.app.client.addCommand('onClearBrowsingData', function (key, value) {
+      logVerbose('onClearBrowsingData("' + key + ': ' + value + '")')
+      return this.execute(function (key, value) {
+        devTools('appActions').onToggleBrowsingData(key, value)
+        return devTools('appActions').onClearBrowsingData()
+      }, key, value).then((response) => response.value)
     })
 
     this.app.client.addCommand('getDefaultWindowHeight', function () {
+      logVerbose('getDefaultWindowHeight()')
       return this.execute(function () {
-        let screen = require('electron').screen
+        let screen = devTools('electron').remote.screen
         let primaryDisplay = screen.getPrimaryDisplay()
         return primaryDisplay.workAreaSize.height
       }).then((response) => response.value)
     })
 
     this.app.client.addCommand('getDefaultWindowWidth', function () {
+      logVerbose('getDefaultWindowWidth()')
       return this.execute(function () {
-        let screen = require('electron').screen
+        let screen = devTools('electron').remote.screen
         let primaryDisplay = screen.getPrimaryDisplay()
         return primaryDisplay.workAreaSize.width
       }).then((response) => response.value)
     })
 
     this.app.client.addCommand('getPrimaryDisplayHeight', function () {
+      logVerbose('getPrimaryDisplayHeight()')
       return this.execute(function () {
-        let screen = require('electron').screen
+        let screen = devTools('electron').remote.screen
         return screen.getPrimaryDisplay().bounds.height
       }).then((response) => response.value)
     })
@@ -458,19 +846,22 @@ var exports = {
     })
 
     this.app.client.addCommand('getPrimaryDisplayWidth', function () {
+      logVerbose('getPrimaryDisplayWidth()')
       return this.execute(function () {
-        let screen = require('electron').screen
+        let screen = devTools('electron').remote.screen
         return screen.getPrimaryDisplay().bounds.width
       }).then((response) => response.value)
     })
 
     this.app.client.addCommand('resizeWindow', function (width, height) {
+      logVerbose('resizeWindow("' + width + '", "' + height + '")')
       return this.execute(function (width, height) {
-        return require('electron').remote.getCurrentWindow().setSize(width, height)
+        return devTools('electron').remote.getCurrentWindow().setSize(width, height)
       }, width, height).then((response) => response.value)
     })
 
     this.app.client.addCommand('windowParentByUrl', function (url, childSelector = 'webview') {
+      logVerbose('windowParentByUrl("' + url + '", "' + childSelector + '")')
       var context = this
       return this.windowHandles().then((response) => response.value).then(function (handles) {
         return promiseMapSeries(handles, function (handle) {
@@ -487,11 +878,13 @@ var exports = {
     })
 
     this.app.client.addCommand('windowByUrl', function (url) {
+      logVerbose('windowByUrl("' + url + '")')
       var context = this
       return this.windowHandles().then((response) => response.value).then(function (handles) {
         return promiseMapSeries(handles, function (handle) {
           return context.window(handle).getUrl()
         }).then(function (response) {
+          logVerbose('windowByUrl("' + url + '") => ' + JSON.stringify(response))
           let index = response.indexOf(url)
           if (index !== -1) {
             return context.window(handles[index])
@@ -503,6 +896,7 @@ var exports = {
     })
 
     this.app.client.addCommand('tabByUrl', function (url) {
+      logVerbose('tabByUrl("' + url + '")')
       var context = this
       return this.tabHandles().then((response) => response.value).then(function (handles) {
         return promiseMapSeries(handles, function (handle) {
@@ -519,21 +913,23 @@ var exports = {
     })
 
     this.app.client.addCommand('sendWebviewEvent', function (frameKey, eventName, ...params) {
+      logVerbose('sendWebviewEvent("' + frameKey + '", "' + eventName + '")')
       return this.execute(function (frameKey, eventName, ...params) {
         const webview = document.querySelector('webview[data-frame-key="' + frameKey + '"]')
         // Get the internal view instance ID from the selected webview
         var v8Util = process.atomBinding('v8_util')
         var internal = v8Util.getHiddenValue(webview, 'internal')
-        internal.viewInstanceId
+
         // This allows you to send more args than just the event itself like would only
         // be possible with dispatchEvent.
-        require('electron').ipcRenderer.emit('ELECTRON_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-' + internal.viewInstanceId, ...params)
+        devTools('electron').ipcRenderer.emit('ELECTRON_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-' + internal.viewInstanceId, ...params)
       }, frameKey, eventName, ...params).then((response) => response.value)
     })
 
-    this.app.client.addCommand('waitForElementFocus', function (selector) {
+    this.app.client.addCommand('waitForElementFocus', function (selector, timeout) {
+      logVerbose('waitForElementFocus("' + selector + '", "' + timeout + '")')
       let activeElement
-      return this.waitForVisible(selector)
+      return this.waitForVisible(selector, timeout)
         .element(selector)
           .then(function (el) { activeElement = el })
         .waitUntil(function () {
@@ -541,7 +937,7 @@ var exports = {
             .then(function (el) {
               return el.value.ELEMENT === activeElement.value.ELEMENT
             })
-        })
+        }, timeout, null, 100)
     })
 
     this.app.client.addCommand('waitForDataFile', function (dataFile) {
@@ -553,6 +949,75 @@ var exports = {
         })
       }, 10000)
     })
+
+    // retrieve a map of all the translations per existing IPC message 'translations'
+    this.app.client.addCommand('translations', function () {
+      logVerbose('translations()')
+      return this.ipcSendRendererSync('translations')
+    })
+
+    // get synopsis from the store
+    this.app.client.addCommand('waitUntilSynopsis', function (cb) {
+      return this.waitUntil(function () {
+        return this.getAppState().then((val) => {
+          val = Immutable.fromJS(val)
+          let synopsis = val.getIn(['value', 'publisherInfo', 'synopsis'])
+          if (synopsis !== undefined) {
+            return cb(synopsis)
+          }
+          return false
+        })
+      }, 5000, null, 100)
+    })
+
+    this.app.client.addCommand('typeText', function (selector, text, prevValue) {
+      logVerbose(`typeText(${selector}, ${text}, ${prevValue})`)
+      prevValue = (prevValue === undefined) ? '' : prevValue
+      let current = prevValue
+      let finalValue = handleTypedText(prevValue, text)
+      let i = 0
+
+      return this.waitUntil(function () {
+        current = executeType(current, text[i])
+
+        return this.keys(text[i])
+          .waitUntil(function () {
+            return this.elements(selector).then((res) => {
+              if (!res.value || res.value.length === 0) {
+                logVerbose(`Element not found for the selector ${selector}`)
+                return false
+              }
+
+              let elementIdAttributeCommands = []
+              for (let elem of res.value) {
+                elementIdAttributeCommands.push(this.elementIdAttribute(elem.ELEMENT, 'value'))
+              }
+
+              return Promise.all(elementIdAttributeCommands).then((result) => {
+                if (!Array.isArray(result)) {
+                  return result
+                }
+
+                return result.map(res => res.value)
+              })
+            }).then(function (val) {
+              return val.toString() === current
+            })
+          }).then(function (valid) {
+            if (valid) {
+              i++
+            }
+
+            if (current === finalValue) {
+              return this.getValue(selector).then(function (val) {
+                return val === finalValue
+              })
+            } else {
+              return false
+            }
+          })
+      }, 10000)
+    })
   },
 
   startApp: function () {
@@ -561,42 +1026,78 @@ var exports = {
     }
     let env = {
       NODE_ENV: 'test',
-      BRAVE_USER_DATA_DIR: userDataDir
+      BRAVE_USER_DATA_DIR: userDataDir,
+      SPECTRON: true
     }
     this.app = new Application({
-      // I don't think waitForInterval is actually used.
-      waitforInterval: 5,
-      waitforTimeout: exports.defaultTimeout,
       quitTimeout: 0,
-      path: './node_modules/.bin/electron',
+      waitTimeout: exports.defaultTimeout,
+      waitInterval: exports.defaultInterval,
+      connectionRetryTimeout: exports.defaultTimeout,
+      path: process.platform === 'win32'
+        ? 'node_modules/electron-prebuilt/dist/brave.exe'
+        : './node_modules/.bin/electron',
       env,
-      args: ['./', '--debug=5858', '--enable-logging', '--v=1']
+      args: ['./', '--enable-logging', '--v=1'],
+      requireName: 'devTools'
     })
     return this.app.start()
   },
 
-  stopApp: function (cleanSessionStore = true) {
-    let stop = this.app.stop().then((app) => {
+  stopApp: function (cleanSessionStore = true, timeout = 100) {
+    const promises = []
+
+    if (process.env.BRAVE_TEST_ALL_LOGS || process.env.BRAVE_TEST_BROWSER_LOGS) {
+      promises.push((callback) => {
+        this.app.client.getMainProcessLogs().then(function (logs) {
+          logs.forEach(function (log) {
+            console.log(log)
+          })
+          callback()
+        })
+      })
+    }
+
+    if (process.env.BRAVE_TEST_ALL_LOGS || process.env.BRAVE_TEST_RENDERER_LOGS) {
+      promises.push((callback) => {
+        this.app.client.getRenderProcessLogs().then(function (logs) {
+          logs.forEach(function (log) {
+            console.log(log)
+          })
+          callback()
+        })
+      })
+    }
+
+    const cleanup = (callback) => {
       if (cleanSessionStore) {
         if (!process.env.KEEP_BRAVE_USER_DATA_DIR) {
           userDataDir && rmDir(userDataDir)
         }
         userDataDir = generateUserDataDir()
       }
-      return app
+      callback()
+    }
+
+    promises.push((callback) => {
+      callback = setTimeout(cleanup.bind(this, callback), timeout)
+      this.app.client.waitForBrowserWindow().quit()
+        .then(callback)
+        .catch((err) => {
+          console.error('Quit failed: ', err)
+          this.app.stop.then(callback)
+        })
     })
 
-    // this.app.client.getMainProcessLogs().then(function (logs) {
-    //   logs.forEach(function (log) {
-    //     console.log(log)
-    //   })
-    // })
-    // this.app.client.getRenderProcessLogs().then(function (logs) {
-    //   logs.forEach(function (log) {
-    //     console.log(log)
-    //   })
-    // })
-    return stop
+    return new Promise((resolve, reject) => {
+      series(promises, (err) => {
+        if (err) {
+          console.log(err)
+          reject(new Error(err))
+        }
+        resolve()
+      })
+    })
   }
 }
 

@@ -4,7 +4,12 @@
 
 @import "variables.less";
 
-button[class*="Button"] {
+// Remove this class from buttons as soon as
+// they have been refactored.
+// Only use it for default HTML <button> elements
+// Otherwise please keep with BrowserButton and
+// this class is unecessary.
+.normalizeButton {
   background: none;
   outline: none;
   border: none;
@@ -23,7 +28,7 @@ span.buttonSeparator {
   display: inline-block;
   width: 20px;
   height: 13px;
-  margin: 9px 4px 0 0;
+  margin: 6px 2px 0 0;
   cursor: default;
   -webkit-mask-image: url('../img/toolbar/menu_btn.svg');
   -webkit-mask-repeat: no-repeat;
@@ -47,7 +52,15 @@ span.buttonSeparator {
   text-align: center;
   transition: .1s opacity, .1s background;
   user-select: none;
-  -webkit-user-select: none;
+  user-select: none;
+
+  // Inhehit from global [*=Button] selector
+  background: none;
+  outline: none;
+  border: none;
+  margin: 0;
+  white-space: nowrap;
+
 
   & + .browserButton {
     margin-left: 5px;
@@ -64,16 +77,7 @@ span.buttonSeparator {
     opacity: .25 !important;
   }
 
-  &.smallButton {
-    line-height: 18px;
-    width: 18px;
-    height: 18px;
-    font-size: 24px;
-  }
-
   &.primaryButton,
-  &.actionButton,
-  &.wideButton,
   &.subtleButton,
   &.whiteButton {
     color: #fff;
@@ -82,10 +86,10 @@ span.buttonSeparator {
     padding-bottom: 5px;
     width: auto;
     height: auto;
+    min-width: calc(@defaultFontSize * 6); // issue #6384
   }
 
   &.primaryButton,
-  &.actionButton,
   &.subtleButton,
   &.whiteButton {
     padding-right: 16px;
@@ -94,27 +98,17 @@ span.buttonSeparator {
 
   &.primaryButton {
     background: linear-gradient(@braveLightOrange, @braveOrange);
-    border: 1px solid transparent;
-    border-top: 1px solid @braveLightOrange;
-    border-bottom: 1px solid @braveOrange;
+    border: 2px solid transparent;
+    border-top: 2px solid @braveLightOrange;
+    border-bottom: 2px solid @braveOrange;
     box-shadow: @buttonShadow;
     font-weight: 500;
 
     &:hover {
-      border: 1px solid white;
+      border: 2px solid white;
       color: white;
       cursor: pointer;
     }
-  }
-
-  &.actionButton {
-    background-color: #4099FF;
-  }
-
-  &.wideButton {
-    width: auto;
-    padding-right: 35px;
-    padding-left: 35px;
   }
 
   &.whiteButton {
@@ -129,37 +123,8 @@ span.buttonSeparator {
     }
   }
 
-  &.inlineButton {
-    display: inline;
-  }
-
   &.subtleButton {
     background-color: #ccc;
     font-size: 14px;
   }
-}
-
-// for about:preferences
-.prefBody {
-  .settingsList > .settingItem + button,
-  .settingItem > span + button,
-  #paymentsContainer button:not(.close) {
-    font-size: 13px;
-    padding: 8px 20px;
-  }
-
-  .settingsList > .settingItem + button {
-    margin-top: 20px;
-  }
-
-  .settingItem > span + button {
-    margin-top: 5px;
-  }
-
-  #paymentsContainer {
-    .browserButton + .browserButton {
-      margin-left: 8px;
-    }
-  }
-
 }

@@ -3,11 +3,16 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const messages = require('../constants/messages')
-const serializer = require('../dispatcher/serializer')
-const windowConstants = require('../constants/windowConstants')
+const appDispatcher = require('../dispatcher/appDispatcher')
 const appConstants = require('../constants/appConstants')
-const ipc = window.chrome.ipc
+const ExtensionConstants = require('../../app/common/constants/extensionConstants')
+const ipc = window.chrome.ipcRenderer
 
+// aboutActions should only contain actions that are relevant to about pages,
+// it should not contain duplicates of actions from appActions, etc... because
+// you can just require and call those directly
+// using ipc.send for actions is also deprecated and dispatchAction should
+// be used along with an appropriate reducer for handling the action
 const aboutActions = {
   /**
    * Dispatches a window action
@@ -15,7 +20,7 @@ const aboutActions = {
    * @param {string} value - The value of the setting to set
    */
   dispatchAction: function (action) {
-    ipc.send(messages.DISPATCH_ACTION, serializer.serialize(action))
+    appDispatcher.dispatch(action)
   },
 
   /**
@@ -75,15 +80,50 @@ const aboutActions = {
   },
 
   /**
+   * Dispatches a message when sync init data needs to be saved
+   * @param {Array.<number>|null} seed
+   */
+  saveSyncInitData: function (seed) {
+    ipc.send(messages.SAVE_INIT_DATA, seed)
+  },
+
+  /**
+   * Dispatches a message when sync needs to be restarted
+   * @param {Array.<number>|null} seed
+   */
+  reloadSyncExtension: function () {
+    ipc.send(messages.RELOAD_SYNC_EXTENSION)
+  },
+
+  /**
+   * Dispatches a message to reset Sync data on this device and the cloud.
+   */
+  resetSync: function () {
+    ipc.send(messages.RESET_SYNC)
+  },
+
+  /**
+   * Dispatched when an extension has been uninstalled
+   *
+   * @param {string} extensionId - the extension id
+   */
+  extensionUninstalled: function (extensionId) {
+    aboutActions.dispatchAction({
+      actionType: ExtensionConstants.EXTENSION_UNINSTALLED,
+      extensionId
+    })
+  },
+
+  /**
    * Loads a URL in a new frame in a safe way.
    * It is important that it is not a simple anchor because it should not
    * preserve the about preload script. See #672
+   * Opens a new tab and loads the specified URL.
    */
-  newFrame: function (frameOpts, openInForeground = true) {
+  createTabRequested: function (createProperties) {
     aboutActions.dispatchAction({
-      actionType: windowConstants.WINDOW_NEW_FRAME,
-      frameOpts,
-      openInForeground
+      actionType: appConstants.APP_CREATE_TAB_REQUESTED,
+      createProperties
     })
   },
 
@@ -108,12 +148,20 @@ const aboutActions = {
     })
   },
 
+  ledgerRecoverWalletFromFile: function () {
+    aboutActions.dispatchAction({
+      actionType: appConstants.APP_RECOVER_WALLET,
+      useRecoveryKeyFile: true
+    })
+  },
+
   /**
    * Clear wallet recovery status
    */
   clearRecoveryStatus: function () {
     aboutActions.dispatchAction({
-      actionType: appConstants.APP_CLEAR_RECOVERY
+      actionType: appConstants.APP_LEDGER_RECOVERY_STATUS_CHANGED,
+      recoverySucceeded: undefined
     })
   },
 
@@ -144,22 +192,21 @@ const aboutActions = {
     ipc.sendToHost(messages.CONTEXT_MENU_OPENED, nodeProps, contextMenuType)
   },
 
-  moveSite: function (sourceDetail, destinationDetail, prepend, destinationIsParent) {
+  moveSite: function (sourceKey, destinationKey, prepend, destinationIsParent) {
     aboutActions.dispatchAction({
       actionType: appConstants.APP_MOVE_SITE,
-      sourceDetail,
-      destinationDetail,
+      sourceKey,
+      destinationKey,
       prepend,
       destinationIsParent
     })
   },
 
-  openDownloadPath: function (download) {
-    ipc.send(messages.OPEN_DOWNLOAD_PATH, download.toJS())
-  },
-
-  decryptPassword: function (encryptedPassword, authTag, iv, id) {
-    ipc.send(messages.DECRYPT_PASSWORD, encryptedPassword, authTag, iv, id)
+  downloadRevealed: function (downloadId) {
+    aboutActions.dispatchAction({
+      actionType: appConstants.APP_DOWNLOAD_REVEALED,
+      downloadId
+    })
   },
 
   setClipboard: function (text) {
@@ -181,11 +228,10 @@ const aboutActions = {
     })
   },
 
-  deletePasswordSite: function (origin) {
+  deletePasswordSite: function (password) {
     aboutActions.dispatchAction({
-      actionType: appConstants.APP_CHANGE_SITE_SETTING,
-      hostPattern: origin,
-      key: 'savePasswords'
+      actionType: appConstants.APP_REMOVE_PASSWORD_SITE,
+      passwordDetail: password
     })
   },
 
@@ -193,10 +239,6 @@ const aboutActions = {
     aboutActions.dispatchAction({
       actionType: appConstants.APP_CLEAR_PASSWORDS
     })
-  },
-
-  checkFlashInstalled: function () {
-    ipc.send(messages.CHECK_FLASH_INSTALLED)
   },
 
   setResourceEnabled: function (resourceName, enabled) {
@@ -207,12 +249,19 @@ const aboutActions = {
     })
   },
 
-  clearBrowsingDataNow: function (clearBrowsingDataDetail) {
-    ipc.sendToHost(messages.CLEAR_BROWSING_DATA_NOW, clearBrowsingDataDetail)
+  clearBrowsingDataNow: function () {
+    ipc.sendToHost(messages.CLEAR_BROWSING_DATA_NOW)
   },
 
   importBrowserDataNow: function () {
     ipc.send(messages.IMPORT_BROWSER_DATA_NOW)
+  },
+
+  /**
+   * Export bookmarks
+   */
+  exportBookmarks: function () {
+    ipc.send(messages.EXPORT_BOOKMARKS)
   },
 
   createWallet: function () {
@@ -303,60 +352,6 @@ const aboutActions = {
     aboutActions.dispatchAction({
       actionType: appConstants.APP_UPDATE_ADBLOCK_CUSTOM_RULES,
       rules
-    })
-  },
-
-  /**
-   * Dispatches a message to submit feedback
-   */
-  submitFeedback: function () {
-    aboutActions.dispatchAction({
-      actionType: appConstants.APP_SUBMIT_FEEDBACK
-    })
-  },
-
-  /**
-   * Show the "Add Bookmark" control
-   * @param {Object} siteDetail - object bound to add/edit control
-   */
-  showAddBookmark: function (siteDetail) {
-    aboutActions.dispatchAction({
-      actionType: windowConstants.WINDOW_SET_BOOKMARK_DETAIL,
-      currentDetail: siteDetail,
-      originalDetail: null,
-      destinationDetail: null,
-      shouldShowLocation: true
-    })
-  },
-
-  /**
-   * Show the "Add Bookmark" control for a folder
-   * @param {Object} siteDetail - object bound to add/edit control
-   */
-  showAddBookmarkFolder: function (siteDetail) {
-    aboutActions.dispatchAction({
-      actionType: windowConstants.WINDOW_SET_BOOKMARK_DETAIL,
-      currentDetail: siteDetail
-    })
-  },
-
-  /**
-   * Dispatches a message to set add/edit bookmark details
-   * If set, also indicates that add/edit is shown
-   * @param {Object} currentDetail - Properties of the bookmark to change to
-   * @param {Object} originalDetail - Properties of the bookmark to edit
-   * @param {Object} destinationDetail - Will move the added bookmark to the specified position
-   * @param {boolean} shouldShowLocation - Whether or not to show the URL input
-   * @param {boolean} isBookmarkHanger - true if triggered from star icon in nav bar
-   */
-  setBookmarkDetail: function (currentDetail, originalDetail, destinationDetail, shouldShowLocation, isBookmarkHanger) {
-    aboutActions.dispatchAction({
-      actionType: windowConstants.WINDOW_SET_BOOKMARK_DETAIL,
-      currentDetail,
-      originalDetail,
-      destinationDetail,
-      shouldShowLocation,
-      isBookmarkHanger
     })
   },
 

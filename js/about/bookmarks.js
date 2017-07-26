@@ -5,27 +5,30 @@
 // Note that these are webpack requires, not CommonJS node requiring requires
 const React = require('react')
 const Immutable = require('immutable')
-const ImmutableComponent = require('../components/immutableComponent')
+const ImmutableComponent = require('../../app/renderer/components/immutableComponent')
 const messages = require('../constants/messages')
 const siteTags = require('../constants/siteTags')
 const dragTypes = require('../constants/dragTypes')
 const aboutActions = require('./aboutActions')
 const dndData = require('../dndData')
 const cx = require('../lib/classSet')
-const SortableTable = require('../components/sortableTable')
+const SortableTable = require('../../app/renderer/components/common/sortableTable')
 const siteUtil = require('../state/siteUtil')
 const formatUtil = require('../../app/common/lib/formatUtil')
-const iconSize = require('../../app/common/lib/faviconUtil').iconSize
+const {iconSize} = require('../constants/config')
+const windowActions = require('../actions/windowActions')
 
-const ipc = window.chrome.ipc
+const ipc = window.chrome.ipcRenderer
+
+const {AboutPageSectionTitle} = require('../../app/renderer/components/common/sectionTitle')
 
 // Stylesheets
 require('../../less/about/bookmarks.less')
 require('../../node_modules/font-awesome/css/font-awesome.css')
 
 class BookmarkFolderItem extends React.Component {
-  constructor () {
-    super()
+  constructor (props) {
+    super(props)
     this.state = {
       isDragOver: false
     }
@@ -57,8 +60,10 @@ class BookmarkFolderItem extends React.Component {
    */
   moveBookmark (e, bookmark) {
     if (siteUtil.isMoveAllowed(this.props.allBookmarkFolders, bookmark, this.props.bookmarkFolder)) {
-      aboutActions.moveSite(bookmark.toJS(),
-        this.props.bookmarkFolder.toJS(),
+      const bookmarkSiteKey = siteUtil.getSiteKey(bookmark)
+      const bookmarkFolderSiteKey = siteUtil.getSiteKey(this.props.bookmarkFolder)
+      aboutActions.moveSite(bookmarkSiteKey,
+        bookmarkFolderSiteKey,
         dndData.shouldPrependVerticalItem(e.target, e.clientY),
         true)
     }
@@ -197,7 +202,7 @@ class BookmarkTitleHeader extends ImmutableComponent {
       parentFolderId: this.props.selectedFolderId,
       tags: [siteTags.BOOKMARK]
     })
-    aboutActions.showAddBookmark(newBookmark)
+    windowActions.addBookmark(newBookmark)
   }
   render () {
     return <div className='th-inner'>
@@ -251,8 +256,8 @@ class BookmarksList extends ImmutableComponent {
     if (e && e.preventDefault) {
       e.preventDefault()
     }
-    aboutActions.newFrame({
-      location: entry.location,
+    aboutActions.createTabRequested({
+      url: entry.location,
       partitionNumber: entry.partitionNumber
     })
   }
@@ -294,8 +299,11 @@ class BookmarksList extends ImmutableComponent {
     }
 
     if (siteUtil.isMoveAllowed(this.props.allBookmarkFolders, bookmark, siteDetail)) {
-      aboutActions.moveSite(bookmark.toJS(),
-        siteDetail.toJS(),
+      const bookmarkSiteKey = siteUtil.getSiteKey(bookmark.toJS())
+      const siteKey = siteUtil.getSiteKey(siteDetail.toJS())
+
+      aboutActions.moveSite(bookmarkSiteKey,
+        siteKey,
         dndData.shouldPrependVerticalItem(e.target, e.clientY),
         destinationIsParent)
     }
@@ -337,8 +345,8 @@ class BookmarksList extends ImmutableComponent {
       <SortableTable
         ref='bookmarkTable'
         headings={[
-          <BookmarkTitleHeader heading='Title' selectedFolderId={this.props.selectedFolderId} />,
-          'Last Visited'
+          <BookmarkTitleHeader heading='title' selectedFolderId={this.props.selectedFolderId} />,
+          <span data-l10n-id='lastVisited' />
         ]}
         defaultHeading='Title'
         rows={this.props.bookmarks.map((entry) => [
@@ -365,12 +373,13 @@ class BookmarksList extends ImmutableComponent {
 }
 
 class AboutBookmarks extends React.Component {
-  constructor () {
-    super()
+  constructor (props) {
+    super(props)
     this.onChangeSelectedFolder = this.onChangeSelectedFolder.bind(this)
     this.onChangeSearch = this.onChangeSearch.bind(this)
     this.onClearSearchText = this.onClearSearchText.bind(this)
     this.importBrowserData = this.importBrowserData.bind(this)
+    this.exportBookmarks = this.exportBookmarks.bind(this)
     this.addBookmarkFolder = this.addBookmarkFolder.bind(this)
     this.onClick = this.onClick.bind(this)
     this.clearSelection = this.clearSelection.bind(this)
@@ -380,10 +389,11 @@ class AboutBookmarks extends React.Component {
       selectedFolderId: 0,
       search: ''
     }
-    ipc.on(messages.BOOKMARKS_UPDATED, (e, detail) => {
+    ipc.on(messages.BOOKMARKS_UPDATED, (e, handle) => {
+      const detail = handle.memory()
       this.setState({
-        bookmarks: Immutable.fromJS(detail && detail.bookmarks || {}),
-        bookmarkFolders: Immutable.fromJS(detail && detail.bookmarkFolders || {})
+        bookmarks: Immutable.fromJS((detail && detail.bookmarks) || {}),
+        bookmarkFolders: Immutable.fromJS((detail && detail.bookmarkFolders) || {})
       })
     })
   }
@@ -428,12 +438,15 @@ class AboutBookmarks extends React.Component {
   importBrowserData () {
     aboutActions.importBrowserDataNow()
   }
+  exportBookmarks () {
+    aboutActions.exportBookmarks()
+  }
   addBookmarkFolder () {
     const newFolder = Immutable.fromJS({
       parentFolderId: this.state.selectedFolderId,
       tags: [siteTags.BOOKMARK_FOLDER]
     })
-    aboutActions.showAddBookmarkFolder(newFolder)
+    windowActions.addBookmark(newFolder)
   }
   clearSelection () {
     this.refs.bookmarkList.clearSelection()
@@ -442,11 +455,13 @@ class AboutBookmarks extends React.Component {
     this.refs.bookmarkSearch.focus()
   }
   render () {
-    return <div className='siteDetailsPage' onClick={this.onClick}>
+    return <div className='siteDetailsPage bookmarksManager' onClick={this.onClick}>
       <div className='siteDetailsPageHeader'>
-        <div data-l10n-id='bookmarkManager' className='sectionTitle' />
+        <AboutPageSectionTitle data-l10n-id='bookmarkManager' />
         <div className='headerActions'>
           <div className='searchWrapper'>
+            <span data-l10n-id='importBrowserData' className='importBrowserData' onClick={this.importBrowserData} />
+            <span data-l10n-id='exportBookmarks' className='exportBookmarks' onClick={this.exportBookmarks} />
             <input type='text' className='searchInput' ref='bookmarkSearch' id='bookmarkSearch' value={this.state.search} onChange={this.onChangeSearch} data-l10n-id='bookmarkSearch' />
             {
               this.state.search
@@ -461,7 +476,6 @@ class AboutBookmarks extends React.Component {
         <div className='folderView'>
           <div className='columnHeader'>
             <span data-l10n-id='folders' />
-            <span data-l10n-id='importBrowserData' className='fa fa-download importBrowserData' onClick={this.importBrowserData} />
             <span data-l10n-id='addBookmarkFolder' className='addBookmarkFolder' onClick={this.addBookmarkFolder} />
           </div>
           <BookmarkFolderList

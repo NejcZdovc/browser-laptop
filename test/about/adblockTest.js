@@ -12,13 +12,13 @@ describe('about:adblock', function () {
       .waitForUrl(Brave.newTabUrl)
       .waitForBrowserWindow()
       .waitForVisible(urlInput)
-      .waitForExist('.tab[data-frame-key="1"]')
+      .waitForExist('[data-test-id="tab"][data-frame-key="1"]')
       .tabByIndex(0)
       .loadUrl(url)
   })
 
   it('lists adblock count', function * () {
     yield this.app.client
-      .getText('.blockedCountTotal').should.eventually.be.equal('0')
+      .waitForTextValue('[data-test-id="blockedCountTotal"]', '0')
   })
 })

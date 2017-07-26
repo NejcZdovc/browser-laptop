@@ -2,59 +2,66 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const electron = global.require('electron')
+const electron = require('electron')
 const remote = electron.remote
 const Menu = remote.Menu
 const Immutable = require('immutable')
-const clipboard = electron.clipboard
-const nativeImage = electron.nativeImage
+const clipboard = remote.clipboard
 const messages = require('./constants/messages')
 const windowStore = require('./stores/windowStore')
 const windowActions = require('./actions/windowActions')
 const webviewActions = require('./actions/webviewActions')
 const bookmarkActions = require('./actions/bookmarkActions')
-const downloadActions = require('./actions/downloadActions')
 const appActions = require('./actions/appActions')
 const siteTags = require('./constants/siteTags')
-const dragTypes = require('./constants/dragTypes')
+const electronDownloadItemActions = require('../app/common/constants/electronDownloadItemActions')
 const siteUtil = require('./state/siteUtil')
 const downloadUtil = require('./state/downloadUtil')
 const menuUtil = require('../app/common/lib/menuUtil')
+const urlUtil = require('./lib/urlutil')
 const CommonMenu = require('../app/common/commonMenu')
-const dnd = require('./dnd')
-const dndData = require('./dndData')
 const appStoreRenderer = require('./stores/appStoreRenderer')
-const ipc = global.require('electron').ipcRenderer
+const ipc = require('electron').ipcRenderer
 const locale = require('../js/l10n')
 const {getSetting} = require('./settings')
 const settings = require('./constants/settings')
 const textUtils = require('./lib/text')
+const {getPartitionFromNumber, getActiveFrame} = require('./state/frameStateUtil')
 const {isIntermediateAboutPage, isUrl, aboutUrls} = require('./lib/appUrlUtil')
 const {getBase64FromImageUrl} = require('./lib/imageUtil')
-const urlParse = require('url').parse
-const eventUtil = require('./lib/eventUtil')
-const currentWindow = require('../app/renderer/currentWindow')
-const config = require('./constants/config')
-const {bookmarksToolbarMode} = require('../app/common/constants/settingsEnums')
+const urlParse = require('../app/common/urlParse')
+const {getCurrentWindow} = require('../app/renderer/currentWindow')
 const extensionState = require('../app/common/state/extensionState')
 const extensionActions = require('../app/common/actions/extensionActions')
-const appStore = require('./stores/appStoreRenderer')
+const {makeImmutable} = require('../app/common/state/immutableUtil')
 
 const isDarwin = process.platform === 'darwin'
+const isLinux = process.platform === 'linux'
 
 /**
  * Obtains an add bookmark menu item
- * @param {object} Detail of the bookmark to initialize with
  */
 const addBookmarkMenuItem = (label, siteDetail, closestDestinationDetail, isParent) => {
   return {
     label: locale.translation(label),
     accelerator: 'CmdOrCtrl+D',
     click: () => {
-      if (isParent) {
-        siteDetail = siteDetail.set('parentFolderId', closestDestinationDetail && (closestDestinationDetail.get('folderId') || closestDestinationDetail.get('parentFolderId')))
+      let closestKey = null
+
+      if (closestDestinationDetail) {
+        closestKey = siteUtil.getSiteKey(closestDestinationDetail)
+
+        if (isParent) {
+          siteDetail = siteDetail.set('parentFolderId', (closestDestinationDetail.get('folderId') || closestDestinationDetail.get('parentFolderId')))
+        }
       }
-      windowActions.setBookmarkDetail(siteDetail, siteDetail, closestDestinationDetail, true)
+
+      if (siteDetail.constructor !== Immutable.Map) {
+        siteDetail = Immutable.fromJS(siteDetail)
+      }
+
+      siteDetail = siteDetail.set('location', urlUtil.getLocationIfPDF(siteDetail.get('location')))
+      windowActions.addBookmark(siteDetail, closestKey)
     }
   }
 }
@@ -63,32 +70,20 @@ const addFolderMenuItem = (closestDestinationDetail, isParent) => {
   return {
     label: locale.translation('addFolder'),
     click: () => {
-      let emptyFolder = Immutable.fromJS({ tags: [siteTags.BOOKMARK_FOLDER] })
-      if (isParent) {
-        emptyFolder = emptyFolder.set('parentFolderId', closestDestinationDetail && (closestDestinationDetail.get('folderId') || closestDestinationDetail.get('parentFolderId')))
+      let siteDetail = Immutable.fromJS({ tags: [siteTags.BOOKMARK_FOLDER] })
+      let closestKey = null
+
+      if (closestDestinationDetail) {
+        closestKey = siteUtil.getSiteKey(closestDestinationDetail)
+
+        if (isParent) {
+          siteDetail = siteDetail.set('parentFolderId', (closestDestinationDetail.get('folderId') || closestDestinationDetail.get('parentFolderId')))
+        }
       }
-      windowActions.setBookmarkDetail(emptyFolder, undefined, closestDestinationDetail, false)
+
+      windowActions.addBookmark(siteDetail, closestKey)
     }
   }
-}
-
-const getDownloadsBarHeight = () => {
-  const root = window.getComputedStyle(document.querySelector(':root'))
-  return Number.parseInt(root.getPropertyValue('--downloads-bar-height'), 10)
-}
-
-function tabPageTemplateInit (framePropsList) {
-  return [{
-    label: locale.translation('unmuteTabs'),
-    click: (item, focusedWindow) => {
-      windowActions.muteAllAudio(framePropsList, false)
-    }
-  }, {
-    label: locale.translation('muteTabs'),
-    click: (item, focusedWindow) => {
-      windowActions.muteAllAudio(framePropsList, true)
-    }
-  }]
 }
 
 function urlBarTemplateInit (searchDetail, activeFrame, e) {
@@ -101,8 +96,8 @@ function urlBarTemplateInit (searchDetail, activeFrame, e) {
     items.push({
       label: locale.translation('pasteAndGo'),
       enabled: hasClipboard,
-      click: (item, focusedWindow) => {
-        windowActions.loadUrl(activeFrame, clipboardText)
+      click: (item) => {
+        appActions.loadURLRequested(activeFrame.get('tabId'), clipboardText)
       }
     })
   } else {
@@ -111,8 +106,8 @@ function urlBarTemplateInit (searchDetail, activeFrame, e) {
     items.push({
       label: locale.translation('pasteAndSearch'),
       enabled: hasClipboard,
-      click: (item, focusedWindow) => {
-        windowActions.loadUrl(activeFrame, searchUrl)
+      click: (item) => {
+        appActions.loadURLRequested(activeFrame.get('tabId'), searchUrl)
       }
     })
   }
@@ -124,7 +119,7 @@ function findBarTemplateInit () {
   return getEditableItems(window.getSelection().toString())
 }
 
-function tabsToolbarTemplateInit (activeFrame, closestDestinationDetail, isParent) {
+function tabsToolbarTemplateInit (bookmarkTitle, bookmarkLink, closestDestinationDetail, isParent) {
   const template = [
     CommonMenu.bookmarksManagerMenuItem(),
     CommonMenu.bookmarksToolbarMenuItem(),
@@ -136,8 +131,12 @@ function tabsToolbarTemplateInit (activeFrame, closestDestinationDetail, isParen
       CommonMenu.separatorMenuItem)
   }
 
-  template.push(addBookmarkMenuItem('addBookmark', siteUtil.getDetailFromFrame(activeFrame, siteTags.BOOKMARK), closestDestinationDetail, isParent),
-    addFolderMenuItem(closestDestinationDetail, isParent))
+  template.push(addBookmarkMenuItem('addBookmark', {
+    title: bookmarkTitle,
+    location: bookmarkLink,
+    tags: [siteTags.BOOKMARK]
+  }, closestDestinationDetail, isParent))
+  template.push(addFolderMenuItem(closestDestinationDetail, isParent))
 
   return menuUtil.sanitizeTemplateItems(template)
 }
@@ -146,60 +145,59 @@ function downloadsToolbarTemplateInit (downloadId, downloadItem) {
   const template = []
 
   if (downloadItem) {
-    const downloads = appStoreRenderer.state.get('downloads')
     if (downloadUtil.shouldAllowPause(downloadItem)) {
       template.push({
         label: locale.translation('downloadItemPause'),
-        click: downloadActions.pauseDownload.bind(null, downloadId)
+        click: appActions.downloadActionPerformed.bind(null, downloadId, electronDownloadItemActions.PAUSE)
       })
     }
 
     if (downloadUtil.shouldAllowResume(downloadItem)) {
       template.push({
         label: locale.translation('downloadItemResume'),
-        click: downloadActions.resumeDownload.bind(null, downloadId)
+        click: appActions.downloadActionPerformed.bind(null, downloadId, electronDownloadItemActions.RESUME)
       })
     }
 
     if (downloadUtil.shouldAllowCancel(downloadItem)) {
       template.push({
         label: locale.translation('downloadItemCancel'),
-        click: downloadActions.cancelDownload.bind(null, downloadId)
+        click: appActions.downloadActionPerformed.bind(null, downloadId, electronDownloadItemActions.CANCEL)
       })
     }
 
     if (downloadUtil.shouldAllowRedownload(downloadItem)) {
       template.push({
         label: locale.translation('downloadItemRedownload'),
-        click: downloadActions.redownloadURL.bind(null, downloadItem, downloadId)
+        click: appActions.downloadRedownloaded.bind(null, downloadId)
       })
     }
 
     if (downloadUtil.shouldAllowCopyLink(downloadItem)) {
       template.push({
         label: locale.translation('downloadItemCopyLink'),
-        click: downloadActions.copyLinkToClipboard.bind(null, downloadItem)
+        click: appActions.downloadCopiedToClipboard.bind(null, downloadId)
       })
     }
 
     if (downloadUtil.shouldAllowOpenDownloadLocation(downloadItem)) {
       template.push({
         label: locale.translation('downloadItemPath'),
-        click: downloadActions.locateShellPath.bind(null, downloadItem)
+        click: appActions.downloadRevealed.bind(null, downloadId)
       })
     }
 
     if (downloadUtil.shouldAllowDelete(downloadItem)) {
       template.push({
         label: locale.translation('downloadItemDelete'),
-        click: downloadActions.deleteDownload.bind(null, downloads, downloadItem, downloadId)
+        click: appActions.downloadDeleted.bind(null, downloadId)
       })
     }
 
     if (downloadUtil.shouldAllowRemoveFromList(downloadItem)) {
       template.push({
         label: locale.translation('downloadItemClear'),
-        click: downloadActions.clearDownload.bind(null, downloads, downloadId)
+        click: appActions.downloadCleared.bind(null, downloadId)
       })
     }
   }
@@ -275,6 +273,7 @@ function siteDetailTemplateInit (siteDetail, activeFrame) {
 
       template.push(openInNewTabMenuItem(location, undefined, siteDetail.get('partitionNumber')),
         openInNewPrivateTabMenuItem(location),
+        openInNewWindowMenuItem(location, undefined, siteDetail.get('partitionNumber')),
         openInNewSessionTabMenuItem(location),
         copyAddressMenuItem('copyLinkAddress', location),
         CommonMenu.separatorMenuItem)
@@ -305,7 +304,10 @@ function siteDetailTemplateInit (siteDetail, activeFrame) {
       template.push(
         {
           label: locale.translation(isFolder ? 'editFolder' : 'editBookmark'),
-          click: () => windowActions.setBookmarkDetail(siteDetail, siteDetail, null, true)
+          click: () => {
+            const editKey = siteUtil.getSiteKey(siteDetail)
+            windowActions.editBookmark(false, editKey)
+          }
         },
         CommonMenu.separatorMenuItem)
     }
@@ -335,107 +337,6 @@ function siteDetailTemplateInit (siteDetail, activeFrame) {
   return menuUtil.sanitizeTemplateItems(template)
 }
 
-function showBookmarkFolderInit (allBookmarkItems, parentBookmarkFolder, activeFrame) {
-  const items = siteUtil.filterSitesRelativeTo(allBookmarkItems, parentBookmarkFolder)
-  if (items.size === 0) {
-    return [{
-      l10nLabelId: 'emptyFolderItem',
-      enabled: false,
-      dragOver: function (e) {
-        e.preventDefault()
-        e.dataTransfer.dropEffect = 'move'
-      },
-      drop (e) {
-        e.preventDefault()
-        const bookmark = dnd.prepareBookmarkDataFromCompatible(e.dataTransfer)
-        if (bookmark) {
-          appActions.moveSite(bookmark, parentBookmarkFolder, false, true)
-        }
-      }
-    }]
-  }
-  return bookmarkItemsInit(allBookmarkItems, items, activeFrame)
-}
-
-function bookmarkItemsInit (allBookmarkItems, items, activeFrame) {
-  const btbMode = getSetting(settings.BOOKMARKS_TOOLBAR_MODE)
-  const showFavicon = (btbMode === bookmarksToolbarMode.TEXT_AND_FAVICONS || btbMode === bookmarksToolbarMode.FAVICONS_ONLY)
-  const template = items.map((site) => {
-    const isFolder = siteUtil.isFolder(site)
-    let faIcon
-    if (showFavicon && !site.get('favicon')) {
-      faIcon = isFolder ? 'fa-folder-o' : 'fa-file-o'
-    }
-    const templateItem = {
-      bookmark: site,
-      draggable: true,
-      label: site.get('customTitle') || site.get('title') || site.get('location'),
-      icon: showFavicon ? site.get('favicon') : undefined,
-      faIcon,
-      contextMenu: function (e) {
-        onSiteDetailContextMenu(site, activeFrame, e)
-      },
-      dragEnd: function (e) {
-        dnd.onDragEnd(dragTypes.BOOKMARK, site, e)
-      },
-      dragStart: function (e) {
-        dnd.onDragStart(dragTypes.BOOKMARK, site, e)
-      },
-      dragOver: function (e) {
-        e.preventDefault()
-        e.dataTransfer.dropEffect = 'move'
-      },
-      drop: function (e) {
-        e.preventDefault()
-        const bookmarkItem = dnd.prepareBookmarkDataFromCompatible(e.dataTransfer)
-        if (bookmarkItem) {
-          appActions.moveSite(bookmarkItem, site, dndData.shouldPrependVerticalItem(e.target, e.clientY))
-        }
-      },
-      click: function (e) {
-        bookmarkActions.clickBookmarkItem(allBookmarkItems, site, activeFrame, e)
-      }
-    }
-    if (isFolder) {
-      templateItem.submenu = showBookmarkFolderInit(allBookmarkItems, site, activeFrame)
-    }
-    return templateItem
-  }).toJS()
-  return menuUtil.sanitizeTemplateItems(template)
-}
-
-function moreBookmarksTemplateInit (allBookmarkItems, bookmarks, activeFrame) {
-  const template = bookmarkItemsInit(allBookmarkItems, bookmarks, activeFrame)
-  template.push({
-    l10nLabelId: 'moreBookmarks',
-    click: function () {
-      windowActions.newFrame({ location: 'about:bookmarks' })
-      windowActions.setContextMenuDetail()
-    }
-  })
-  return menuUtil.sanitizeTemplateItems(template)
-}
-
-function usernameTemplateInit (usernames, origin, action) {
-  let template = []
-  for (let username in usernames) {
-    let password = usernames[username]
-    template.push({
-      label: username,
-      click: (item, focusedWindow) => {
-        windowActions.setActiveFrameShortcut(null, messages.FILL_PASSWORD, {
-          username,
-          password,
-          origin,
-          action
-        })
-        windowActions.setContextMenuDetail()
-      }
-    })
-  }
-  return menuUtil.sanitizeTemplateItems(template)
-}
-
 function autofillTemplateInit (suggestions, frame) {
   const template = []
   for (let i = 0; i < suggestions.length; ++i) {
@@ -445,19 +346,30 @@ function autofillTemplateInit (suggestions, frame) {
       value = suggestions[i].value
     } else if (frontendId === -1) { // POPUP_ITEM_ID_WARNING_MESSAGE
       value = 'Disabled due to unsecure connection.'
+    } else if (frontendId === -2) { // POPUP_ITEM_ID_PASSWORD_ENTRY
+      value = suggestions[i].value
     } else if (frontendId === -4) { // POPUP_ITEM_ID_CLEAR_FORM
       value = 'Clear Form'
     } else if (frontendId === -5) { // POPUP_ITEM_ID_AUTOFILL_OPTIONS
       value = 'Autofill Settings'
+    } else if (frontendId === -6) { // POPUP_ITEM_ID_DATALIST_ENTRY
+      value = suggestions[i].value
+    } else if (frontendId === -11) { // POPUP_ITEM_ID_USERNAME_ENTRY
+      value = suggestions[i].value
+    }
+    if (frontendId === -2) {
+      template.push({
+        label: 'Use password for:',
+        enabled: false
+      })
     }
     if (frontendId === -3) { // POPUP_ITEM_ID_SEPARATOR
       template.push(CommonMenu.separatorMenuItem)
     } else {
       template.push({
         label: value,
-        click: (item, focusedWindow) => {
-          ipc.send('autofill-selection-clicked', frame.get('tabId'), value, frontendId, i)
-          windowActions.setContextMenuDetail()
+        click: (item) => {
+          windowActions.autofillSelectionClicked(frame.get('tabId'), value, frontendId, i)
         }
       })
     }
@@ -465,10 +377,46 @@ function autofillTemplateInit (suggestions, frame) {
   return menuUtil.sanitizeTemplateItems(template)
 }
 
+function flashTemplateInit (frameProps) {
+  const canRunFlash = appStoreRenderer.state.getIn(['flash', 'enabled']) && getSetting(settings.FLASH_INSTALLED)
+  const template = []
+  if (!canRunFlash) {
+    template.push({
+      label: locale.translation('openFlashPreferences'),
+      click: () => {
+        appActions.createTabRequested({
+          url: 'about:preferences#plugins',
+          windowId: frameProps.get('windowId'),
+          active: true
+        })
+      }
+    })
+  } else {
+    template.push({
+      label: locale.translation('allowFlashOnce'),
+      click: () => {
+        appActions.allowFlashOnce(frameProps.get('tabId'), frameProps.get('location'), frameProps.get('isPrivate'))
+      }
+    })
+    if (!frameProps.get('isPrivate')) {
+      template.push({
+        label: locale.translation('allowFlashAlways'),
+        click: () => {
+          appActions.allowFlashAlways(frameProps.get('tabId'), frameProps.get('location'))
+        }
+      })
+    }
+  }
+  return template
+}
+
 function tabTemplateInit (frameProps) {
   const frameKey = frameProps.get('key')
-  const template = [CommonMenu.newTabMenuItem(frameProps.get('key'))]
+  const tabId = frameProps.get('tabId')
+  const template = [CommonMenu.newTabMenuItem(frameProps.get('tabId'))]
   const location = frameProps.get('location')
+  const store = windowStore.getState()
+
   if (location !== 'about:newtab') {
     template.push(
       CommonMenu.separatorMenuItem,
@@ -481,14 +429,21 @@ function tabTemplateInit (frameProps) {
         }
       }, {
         label: locale.translation('clone'),
-        click: (item, focusedWindow) => {
-          if (focusedWindow) {
-            focusedWindow.webContents.send(messages.SHORTCUT_FRAME_CLONE, frameKey, {
-              openInForeground: true
-            })
-          }
+        click: (item) => {
+          appActions.tabCloned(tabId)
         }
       })
+  }
+
+  if (windowStore.getState().get('frames').size > 1 &&
+      !frameProps.get('pinnedLocation')) {
+    template.push({
+      label: locale.translation('detach'),
+      click: (item) => {
+        const browserOpts = { positionByMouseCursor: true }
+        appActions.tabMoved(tabId, frameProps.toJS(), browserOpts, -1)
+      }
+    })
   }
 
   if (!frameProps.get('isPrivate')) {
@@ -498,7 +453,7 @@ function tabTemplateInit (frameProps) {
         label: locale.translation(isPinned ? 'unpinTab' : 'pinTab'),
         click: (item) => {
           // Handle converting the current tab window into a pinned site
-          windowActions.setPinned(frameProps, !isPinned)
+          appActions.tabPinned(tabId, !isPinned)
         }
       })
     }
@@ -512,11 +467,21 @@ function tabTemplateInit (frameProps) {
   //   }
   // })
 
+  const frames = windowStore.getState().get('frames')
+  const frameToSkip = frameProps.get('key')
+  const frameList = frames.map((frame) => {
+    return {
+      frameKey: frame.get('key'),
+      tabId: frame.get('tabId'),
+      muted: frame.get('key') !== frameToSkip && frame.get('audioPlaybackActive')
+    }
+  })
+
   template.push(CommonMenu.separatorMenuItem,
     {
       label: locale.translation('muteOtherTabs'),
-      click: (item, focusedWindow) => {
-        windowActions.muteAllAudioExcept(frameProps)
+      click: () => {
+        windowActions.muteAllAudio(frameList)
       }
     })
 
@@ -526,7 +491,7 @@ function tabTemplateInit (frameProps) {
     template.push({
       label: locale.translation(isMuted ? 'unmuteTab' : 'muteTab'),
       click: (item) => {
-        windowActions.setAudioMuted(frameProps, !isMuted)
+        windowActions.setAudioMuted(frameKey, tabId, !isMuted)
       }
     })
   }
@@ -539,7 +504,7 @@ function tabTemplateInit (frameProps) {
       click: (item, focusedWindow) => {
         if (focusedWindow) {
           // TODO: Don't switch active tabs when this is called
-          focusedWindow.webContents.send(messages.SHORTCUT_CLOSE_FRAME, frameKey)
+          focusedWindow.webContents.send(messages.SHORTCUT_CLOSE_FRAME, tabId)
         }
       }
     })
@@ -549,34 +514,34 @@ function tabTemplateInit (frameProps) {
     label: locale.translation('closeOtherTabs'),
     click: (item, focusedWindow) => {
       if (focusedWindow) {
-        focusedWindow.webContents.send(messages.SHORTCUT_CLOSE_OTHER_FRAMES, frameKey, true, true)
+        focusedWindow.webContents.send(messages.SHORTCUT_CLOSE_OTHER_FRAMES, tabId, true, true)
       }
     }
   }, {
     label: locale.translation('closeTabsToRight'),
     click: (item, focusedWindow) => {
       if (focusedWindow) {
-        focusedWindow.webContents.send(messages.SHORTCUT_CLOSE_OTHER_FRAMES, frameKey, true, false)
+        focusedWindow.webContents.send(messages.SHORTCUT_CLOSE_OTHER_FRAMES, tabId, true, false)
       }
     }
   }, {
     label: locale.translation('closeTabsToLeft'),
     click: (item, focusedWindow) => {
       if (focusedWindow) {
-        focusedWindow.webContents.send(messages.SHORTCUT_CLOSE_OTHER_FRAMES, frameKey, false, true)
+        focusedWindow.webContents.send(messages.SHORTCUT_CLOSE_OTHER_FRAMES, tabId, false, true)
       }
     }
   }, CommonMenu.separatorMenuItem)
 
   template.push(Object.assign({},
     CommonMenu.reopenLastClosedTabItem(),
-    { enabled: windowStore.getState().get('closedFrames').size > 0 }
+    { enabled: store.get('closedFrames').size > 0 }
   ))
 
   return menuUtil.sanitizeTemplateItems(template)
 }
 
-function getMisspelledSuggestions (selection, isMisspelled, suggestions) {
+function getMisspelledSuggestions (selection, isMisspelled, suggestions, tabId) {
   const hasSelection = selection.length > 0
   const template = []
   if (hasSelection) {
@@ -587,7 +552,7 @@ function getMisspelledSuggestions (selection, isMisspelled, suggestions) {
         return {
           label: suggestion,
           click: () => {
-            webviewActions.replace(suggestion)
+            appActions.spellingSuggested(suggestion, tabId)
           }
         }
       }), CommonMenu.separatorMenuItem)
@@ -596,16 +561,14 @@ function getMisspelledSuggestions (selection, isMisspelled, suggestions) {
       template.push({
         label: locale.translation('learnSpelling'),
         click: () => {
-          appActions.addWord(selection, true)
-          // This is needed so the underline goes away
-          webviewActions.replace(selection)
+          appActions.learnSpelling(selection, tabId)
         }
-      }, {
-        label: locale.translation('ignoreSpelling'),
+      }, CommonMenu.separatorMenuItem)
+    } else {
+      template.push({
+        label: locale.translation('forgetLearnedSpelling'),
         click: () => {
-          appActions.addWord(selection, false)
-          // This is needed so the underline goes away
-          webviewActions.replace(selection)
+          appActions.forgetLearnedSpelling(selection, tabId)
         }
       }, CommonMenu.separatorMenuItem)
     }
@@ -613,8 +576,8 @@ function getMisspelledSuggestions (selection, isMisspelled, suggestions) {
   return menuUtil.sanitizeTemplateItems(template)
 }
 
-function getEditableItems (selection, editFlags) {
-  const hasSelection = selection.length > 0
+function getEditableItems (selection, editFlags, hasFormat) {
+  const hasSelection = selection && selection.length > 0
   const hasClipboard = clipboard.readText().length > 0
   const template = []
 
@@ -641,11 +604,34 @@ function getEditableItems (selection, editFlags) {
       enabled: hasClipboard,
       role: 'paste'
     })
+    if (hasFormat) {
+      template.push({
+        label: locale.translation('pasteWithoutFormatting'),
+        accelerator: 'Shift+CmdOrCtrl+V',
+        enabled: hasClipboard,
+        click: function (item, focusedWindow) {
+          focusedWindow.webContents.pasteAndMatchStyle()
+        }
+      })
+    }
   }
   return menuUtil.sanitizeTemplateItems(template)
 }
 
 function hamburgerTemplateInit (location, e) {
+  const helpSubmenu = [
+    CommonMenu.aboutBraveMenuItem(),
+    CommonMenu.separatorMenuItem
+  ]
+
+  if (!isLinux) {
+    helpSubmenu.push(
+      CommonMenu.checkForUpdateMenuItem(),
+      CommonMenu.separatorMenuItem)
+  }
+
+  helpSubmenu.push(CommonMenu.submitFeedbackMenuItem())
+
   const template = [
     CommonMenu.newTabMenuItem(),
     CommonMenu.newPrivateTabMenuItem(),
@@ -654,8 +640,7 @@ function hamburgerTemplateInit (location, e) {
     CommonMenu.separatorMenuItem,
     {
       l10nLabelId: 'zoom',
-      type: 'multi',
-      submenu: [{
+      items: [{
         label: '-',
         click: () => {
           ipc.emit(messages.SHORTCUT_ACTIVE_FRAME_ZOOM_OUT)
@@ -680,7 +665,8 @@ function hamburgerTemplateInit (location, e) {
         CommonMenu.bookmarksManagerMenuItem(),
         CommonMenu.bookmarksToolbarMenuItem(),
         CommonMenu.separatorMenuItem,
-        CommonMenu.importBrowserDataMenuItem()
+        CommonMenu.importBrowserDataMenuItem(),
+        CommonMenu.exportBookmarksMenuItem()
       ]
     }, {
       label: locale.translation('bravery'),
@@ -698,33 +684,27 @@ function hamburgerTemplateInit (location, e) {
     CommonMenu.separatorMenuItem,
     {
       label: locale.translation('help'),
-      submenu: [
-        CommonMenu.aboutBraveMenuItem(),
-        CommonMenu.separatorMenuItem,
-        CommonMenu.checkForUpdateMenuItem(),
-        CommonMenu.separatorMenuItem,
-        CommonMenu.reportAnIssueMenuItem(),
-        CommonMenu.submitFeedbackMenuItem()
-      ]
+      submenu: helpSubmenu
     },
     CommonMenu.quitMenuItem()
   ]
   return menuUtil.sanitizeTemplateItems(template)
 }
 
-const openInNewTabMenuItem = (location, isPrivate, partitionNumber, parentFrameKey) => {
-  let openInForeground = getSetting(settings.SWITCH_TO_NEW_TABS) === true
-  if (Array.isArray(location) && Array.isArray(partitionNumber)) {
+const openInNewTabMenuItem = (url, isPrivate, partitionNumber, openerTabId) => {
+  const active = getSetting(settings.SWITCH_TO_NEW_TABS) === true
+  if (Array.isArray(url) && Array.isArray(partitionNumber)) {
     return {
       label: locale.translation('openInNewTabs'),
       click: () => {
-        for (let i = 0; i < location.length; ++i) {
-          windowActions.newFrame(
-            { location: location[i],
-              isPrivate,
-              partitionNumber: partitionNumber[i],
-              parentFrameKey },
-            openInForeground)
+        for (let i = 0; i < url.length; ++i) {
+          appActions.createTabRequested({
+            url: url[i],
+            isPrivate,
+            partitionNumber: partitionNumber[i],
+            openerTabId,
+            active
+          })
         }
       }
     }
@@ -732,7 +712,13 @@ const openInNewTabMenuItem = (location, isPrivate, partitionNumber, parentFrameK
     return {
       label: locale.translation('openInNewTab'),
       click: () => {
-        windowActions.newFrame({ location, isPrivate, partitionNumber, parentFrameKey }, openInForeground)
+        appActions.createTabRequested({
+          url,
+          isPrivate,
+          partitionNumber,
+          openerTabId,
+          active
+        })
       }
     }
   }
@@ -747,18 +733,19 @@ const openAllInNewTabsMenuItem = (allSites, folderDetail) => {
   }
 }
 
-const openInNewPrivateTabMenuItem = (location, parentFrameKey) => {
-  let openInForeground = getSetting(settings.SWITCH_TO_NEW_TABS) === true
-  if (Array.isArray(location)) {
+const openInNewPrivateTabMenuItem = (url, openerTabId) => {
+  const active = getSetting(settings.SWITCH_TO_NEW_TABS) === true
+  if (Array.isArray(url)) {
     return {
       label: locale.translation('openInNewPrivateTabs'),
       click: () => {
-        for (let i = 0; i < location.length; ++i) {
-          windowActions.newFrame({
-            location: location[i],
+        for (let i = 0; i < url.length; ++i) {
+          appActions.createTabRequested({
+            url: url[i],
             isPrivate: true,
-            parentFrameKey
-          }, openInForeground)
+            openerTabId,
+            active
+          })
         }
       }
     }
@@ -766,11 +753,12 @@ const openInNewPrivateTabMenuItem = (location, parentFrameKey) => {
     return {
       label: locale.translation('openInNewPrivateTab'),
       click: () => {
-        windowActions.newFrame({
-          location,
+        appActions.createTabRequested({
+          url,
           isPrivate: true,
-          parentFrameKey
-        }, openInForeground)
+          openerTabId,
+          active
+        })
       }
     }
   }
@@ -785,30 +773,32 @@ const openInNewWindowMenuItem = (location, isPrivate, partitionNumber) => {
   }
 }
 
-const openInNewSessionTabMenuItem = (location, parentFrameKey) => {
-  let openInForeground = getSetting(settings.SWITCH_TO_NEW_TABS) === true
-  if (Array.isArray(location)) {
+const openInNewSessionTabMenuItem = (url, openerTabId) => {
+  const active = getSetting(settings.SWITCH_TO_NEW_TABS) === true
+  if (Array.isArray(url)) {
     return {
       label: locale.translation('openInNewSessionTabs'),
-      click: (item, focusedWindow) => {
-        for (let i = 0; i < location.length; ++i) {
-          windowActions.newFrame({
-            location: location[i],
+      click: (item) => {
+        for (let i = 0; i < url.length; ++i) {
+          appActions.createTabRequested({
+            url: url[i],
             isPartitioned: true,
-            parentFrameKey
-          }, openInForeground)
+            openerTabId,
+            active
+          })
         }
       }
     }
   } else {
     return {
       label: locale.translation('openInNewSessionTab'),
-      click: (item, focusedWindow) => {
-        windowActions.newFrame({
-          location,
+      click: (item) => {
+        appActions.createTabRequested({
+          url,
           isPartitioned: true,
-          parentFrameKey
-        }, openInForeground)
+          openerTabId,
+          active
+        })
       }
     }
   }
@@ -819,7 +809,7 @@ const saveAsMenuItem = (label, location) => {
     label: locale.translation(label),
     click: (item, focusedWindow) => {
       if (focusedWindow && location) {
-        focusedWindow.webContents.downloadURL(location)
+        focusedWindow.webContents.downloadURL(location, true)
       }
     }
   }
@@ -828,9 +818,9 @@ const saveAsMenuItem = (label, location) => {
 const copyAddressMenuItem = (label, location) => {
   return {
     label: locale.translation(label),
-    click: (item, focusedWindow) => {
-      if (focusedWindow && location) {
-        clipboard.writeText(location)
+    click: (item) => {
+      if (location) {
+        appActions.clipboardTextCopied(location)
       }
     }
   }
@@ -840,7 +830,7 @@ const copyEmailAddressMenuItem = (location) => {
   return {
     label: locale.translation('copyEmailAddress'),
     click: () => {
-      clipboard.writeText(location.substring('mailto:'.length, location.length))
+      appActions.clipboardTextCopied(location.substring('mailto:'.length, location.length))
     }
   }
 }
@@ -849,14 +839,17 @@ const searchSelectionMenuItem = (location) => {
   var searchText = textUtils.ellipse(location)
   return {
     label: locale.translation('openSearch').replace(/{{\s*selectedVariable\s*}}/, searchText),
-    click: (item, focusedWindow) => {
-      if (focusedWindow && location) {
+    click: (item) => {
+      if (location) {
         let activeFrame = windowStore.getState().get('activeFrameKey')
         let frame = windowStore.getFrame(activeFrame)
-        let searchUrl = windowStore.getState().getIn(['searchDetail', 'searchURL']).replace('{searchTerms}', encodeURIComponent(location))
-        windowActions.newFrame({ location: searchUrl,
+        let searchUrl = appStoreRenderer.state.getIn(['searchDetail', 'searchURL']).replace('{searchTerms}', encodeURIComponent(location))
+        appActions.createTabRequested({
+          url: searchUrl,
           isPrivate: frame.get('isPrivate'),
-          partitionNumber: frame.get('partitionNumber') }, true)
+          partitionNumber: frame.get('partitionNumber'),
+          windowId: frame.get('windowId')
+        })
       }
     }
   }
@@ -866,72 +859,70 @@ const showDefinitionMenuItem = (selectionText) => {
   let lookupText = textUtils.ellipse(selectionText, 3)
   return {
     label: locale.translation('lookupSelection').replace(/{{\s*selectedVariable\s*}}/, lookupText),
-    click: (item, focusedWindow) => {
+    click: (item) => {
       webviewActions.showDefinitionForSelection()
     }
   }
 }
 
-function mainTemplateInit (nodeProps, frame) {
+function addLinkMenu (link, frame) {
   const template = []
-
-  if (nodeProps.frameURL && nodeProps.frameURL.startsWith('chrome-extension://mnojpmjdmbbfmejpflffifhffcmidifd/about-flash.html')) {
-    const pageOrigin = siteUtil.getOrigin(nodeProps.pageURL)
-    template.push({
-      label: locale.translation('allowFlashOnce'),
-      click: () => {
-        appActions.changeSiteSetting(pageOrigin, 'flash', 1, frame.get('isPrivate'))
-      }
-    })
-    if (!frame.get('isPrivate')) {
-      template.push({
-        label: locale.translation('allowFlashAlways'),
-        click: () => {
-          const expirationTime = Date.now() + 7 * 24 * 3600 * 1000
-          appActions.changeSiteSetting(pageOrigin, 'flash', expirationTime)
-        }
-      })
-    }
-    return menuUtil.sanitizeTemplateItems(template)
+  if (!frame.get('isPrivate')) {
+    template.push(openInNewTabMenuItem(link, frame.get('isPrivate'), frame.get('partitionNumber'), frame.get('tabId')))
   }
+  template.push(
+    openInNewPrivateTabMenuItem(link, frame.get('tabId')),
+    openInNewWindowMenuItem(link, frame.get('isPrivate'), frame.get('partitionNumber')),
+    CommonMenu.separatorMenuItem,
+    openInNewSessionTabMenuItem(link, frame.get('tabId')),
+    CommonMenu.separatorMenuItem)
+
+  if (link.toLowerCase().startsWith('mailto:')) {
+    template.push(copyEmailAddressMenuItem(link))
+  } else {
+    template.push(
+        saveAsMenuItem('saveLinkAs', link),
+        copyAddressMenuItem('copyLinkAddress', link),
+        CommonMenu.separatorMenuItem)
+  }
+
+  return template
+}
+
+function mainTemplateInit (nodeProps, frame, tab) {
+  let template = []
+
+  nodeProps = nodeProps || {}
+  frame = makeImmutable(frame || {})
 
   const isLink = nodeProps.linkURL && nodeProps.linkURL !== ''
   const isImage = nodeProps.mediaType === 'image'
   const isVideo = nodeProps.mediaType === 'video'
   const isAudio = nodeProps.mediaType === 'audio'
   const isInputField = nodeProps.isEditable || nodeProps.inputFieldType !== 'none'
-  const isTextSelected = nodeProps.selectionText.length > 0
+  const isTextSelected = nodeProps.selectionText && nodeProps.selectionText.length > 0
   const isAboutPage = aboutUrls.has(frame.get('location'))
+  const isPrivate = frame.get('isPrivate')
 
   if (isLink) {
-    if (!frame.get('isPrivate')) {
-      template.push(openInNewTabMenuItem(nodeProps.linkURL, frame.get('isPrivate'), frame.get('partitionNumber'), frame.get('key')))
-    }
-    template.push(
-      openInNewPrivateTabMenuItem(nodeProps.linkURL, frame.get('key')),
-      openInNewWindowMenuItem(nodeProps.linkURL, frame.get('isPrivate'), frame.get('partitionNumber')),
-      CommonMenu.separatorMenuItem,
-      openInNewSessionTabMenuItem(nodeProps.linkURL, frame.get('key')),
-      CommonMenu.separatorMenuItem)
-
-    if (nodeProps.linkURL.toLowerCase().startsWith('mailto:')) {
-      template.push(copyEmailAddressMenuItem(nodeProps.linkURL))
-    } else {
-      template.push(
-        saveAsMenuItem('saveLinkAs', nodeProps.linkURL),
-        copyAddressMenuItem('copyLinkAddress', nodeProps.linkURL),
-        CommonMenu.separatorMenuItem)
-    }
+    template = addLinkMenu(nodeProps.linkURL, frame)
+  } else if (isTextSelected && urlUtil.isURL(nodeProps.selectionText)) {
+    template = addLinkMenu(nodeProps.selectionText, frame)
   }
 
   if (isImage) {
+    const active = getSetting(settings.SWITCH_TO_NEW_TABS) === true
     template.push(
       {
         label: locale.translation('openImageInNewTab'),
-        click: (item, focusedWindow) => {
-          if (focusedWindow && nodeProps.srcURL) {
-            // TODO: open this in the next tab instead of last tab
-            focusedWindow.webContents.send(messages.SHORTCUT_NEW_FRAME, nodeProps.srcURL, { isPrivate: frame.get('isPrivate'), partitionNumber: frame.get('partitionNumber') })
+        click: (item) => {
+          if (nodeProps.srcURL) {
+            appActions.createTabRequested({
+              url: nodeProps.srcURL,
+              openerTabId: frame.get('tabId'),
+              partition: getPartitionFromNumber(frame.get('partitionNumber'), isPrivate),
+              active: active
+            })
           }
         }
       },
@@ -939,18 +930,12 @@ function mainTemplateInit (nodeProps, frame) {
       {
         label: locale.translation('copyImage'),
         click: (item) => {
-          const copyFromDataURL = (dataURL) =>
-            clipboard.write({
-              image: nativeImage.createFromDataURL(dataURL),
-              html: `<img src='${nodeProps.srcURL}'>`,
-              text: nodeProps.srcURL
-            })
           if (nodeProps.srcURL) {
             if (urlParse(nodeProps.srcURL).protocol === 'data:') {
-              copyFromDataURL(nodeProps.srcURL)
+              appActions.dataURLCopied(nodeProps.srcURL, `<img src='${nodeProps.srcURL}>`, nodeProps.srcURL)
             } else {
               getBase64FromImageUrl(nodeProps.srcURL).then((dataURL) =>
-                copyFromDataURL(dataURL))
+                appActions.dataURLCopied(dataURL, `<img src='${nodeProps.srcURL}>`, nodeProps.srcURL))
             }
           }
         }
@@ -962,15 +947,17 @@ function mainTemplateInit (nodeProps, frame) {
       template.push(
         {
           label: locale.translation('searchImage'),
-          click: (item) => {
+          click: () => {
             let activeFrame = windowStore.getState().get('activeFrameKey')
             let frame = windowStore.getFrame(activeFrame)
-            let searchUrl = windowStore.getState().getIn(['searchDetail', 'searchURL'])
+            let searchUrl = appStoreRenderer.state.getIn(['searchDetail', 'searchURL'])
               .replace('{searchTerms}', encodeURIComponent(nodeProps.srcURL))
               .replace('?q', 'byimage?image_url')
-            windowActions.newFrame({ location: searchUrl,
-              isPrivate: frame.get('isPrivate'),
-              partitionNumber: frame.get('partitionNumber')}, true)
+            appActions.createTabRequested({
+              url: searchUrl,
+              isPrivate,
+              partitionNumber: frame.get('partitionNumber')
+            })
           }
         }
       )
@@ -981,13 +968,20 @@ function mainTemplateInit (nodeProps, frame) {
   if (isInputField) {
     let misspelledSuggestions = []
     if (nodeProps.misspelledWord) {
-      const info = ipc.sendSync(messages.GET_MISSPELLING_INFO, nodeProps.selectionText)
-      if (info) {
-        misspelledSuggestions = getMisspelledSuggestions(nodeProps.selectionText, info.isMisspelled, info.suggestions)
-      }
+      misspelledSuggestions =
+        getMisspelledSuggestions(nodeProps.selectionText,
+                                 true, nodeProps.dictionarySuggestions,
+                                 frame.get('tabId'))
+    } else if (nodeProps.properties &&
+               nodeProps.properties.hasOwnProperty('customDictionaryWord') &&
+               nodeProps.properties['customDictionaryWord'] === nodeProps.selectionText) {
+      misspelledSuggestions =
+        getMisspelledSuggestions(nodeProps.selectionText,
+                                 false, nodeProps.dictionarySuggestions,
+                                  frame.get('tabId'))
     }
 
-    const editableItems = getEditableItems(nodeProps.selectionText, nodeProps.editFlags)
+    const editableItems = getEditableItems(nodeProps.selectionText, nodeProps.editFlags, true)
     template.push(...misspelledSuggestions, {
       label: locale.translation('undo'),
       accelerator: 'CmdOrCtrl+Z',
@@ -1003,6 +997,9 @@ function mainTemplateInit (nodeProps, frame) {
     }
 
     if (isTextSelected) {
+      if (isDarwin) {
+        template.push(showDefinitionMenuItem(nodeProps.selectionText), CommonMenu.separatorMenuItem)
+      }
       template.push(searchSelectionMenuItem(nodeProps.selectionText), CommonMenu.separatorMenuItem)
     }
   } else if (isTextSelected) {
@@ -1034,7 +1031,7 @@ function mainTemplateInit (nodeProps, frame) {
         template.push(
           {
             label: locale.translation('back'),
-            enabled: frame.get('canGoBack'),
+            enabled: tab.get('canGoBack'),
             click: (item, focusedWindow) => {
               if (focusedWindow) {
                 focusedWindow.webContents.send(messages.SHORTCUT_ACTIVE_FRAME_BACK)
@@ -1042,7 +1039,7 @@ function mainTemplateInit (nodeProps, frame) {
             }
           }, {
             label: locale.translation('forward'),
-            enabled: frame.get('canGoForward'),
+            enabled: tab.get('canGoForward'),
             click: (item, focusedWindow) => {
               if (focusedWindow) {
                 focusedWindow.webContents.send(messages.SHORTCUT_ACTIVE_FRAME_FORWARD)
@@ -1111,14 +1108,15 @@ function mainTemplateInit (nodeProps, frame) {
   if (!isAboutPage) {
     template.push({
       label: locale.translation('inspectElement'),
-      click: (item, focusedWindow) => {
+      click: (item) => {
         webviewActions.inspectElement(nodeProps.x, nodeProps.y)
       }
     })
   }
 
-  const extensionContextMenus =
-    extensionState.getContextMenusProperties(appStore.state)
+  const extensionContextMenus = isPrivate
+    ? undefined
+    : extensionState.getContextMenusProperties(appStoreRenderer.state)
   if (extensionContextMenus !== undefined &&
     extensionContextMenus.length) {
     template.push(CommonMenu.separatorMenuItem)
@@ -1222,11 +1220,12 @@ function onHamburgerMenu (location, e) {
   windowActions.setContextMenuDetail(Immutable.fromJS({
     right: 0,
     top: rect.bottom,
-    template: menuTemplate
+    template: menuTemplate,
+    type: 'hamburgerMenu'
   }))
 }
 
-function onMainContextMenu (nodeProps, frame, contextMenuType) {
+function onMainContextMenu (nodeProps, frame, tab, contextMenuType) {
   if (contextMenuType === 'bookmark' || contextMenuType === 'bookmark-folder') {
     const activeFrame = Immutable.fromJS({ location: '', title: '', partitionNumber: frame.get('partitionNumber') })
     onSiteDetailContextMenu(Immutable.fromJS(nodeProps), activeFrame)
@@ -1237,50 +1236,37 @@ function onMainContextMenu (nodeProps, frame, contextMenuType) {
   } else if (contextMenuType === 'download') {
     onDownloadsToolbarContextMenu(nodeProps.downloadId, Immutable.fromJS(nodeProps))
   } else {
-    const mainMenu = Menu.buildFromTemplate(mainTemplateInit(nodeProps, frame))
-    mainMenu.popup(currentWindow)
-    mainMenu.destroy()
+    const mainMenu = Menu.buildFromTemplate(mainTemplateInit(nodeProps, frame, tab))
+    mainMenu.popup(getCurrentWindow())
   }
+}
+
+function onFlashContextMenu (nodeProps, frameProps) {
+  const flashMenu = Menu.buildFromTemplate(flashTemplateInit(frameProps))
+  flashMenu.popup(getCurrentWindow())
 }
 
 function onTabContextMenu (frameProps, e) {
   e.stopPropagation()
   const tabMenu = Menu.buildFromTemplate(tabTemplateInit(frameProps))
-  tabMenu.popup(currentWindow)
-  tabMenu.destroy()
+  tabMenu.popup(getCurrentWindow())
 }
 
 function onNewTabContextMenu (target) {
-  const rootElement = window.getComputedStyle(document.querySelector(':root'))
-  const contextMenuSize = Number.parseInt(rootElement.getPropertyValue('--context-menu-single-max-width'), 10)
-
-  const containerRect = target.parentNode.getBoundingClientRect()
-  const rect = target.getBoundingClientRect()
-
-  const contextMenuMaxVisibleWidth = rect.right + contextMenuSize / 2
-  const contextMenuHasOverflow = contextMenuMaxVisibleWidth > containerRect.right
-
   const menuTemplate = [
     CommonMenu.newTabMenuItem(),
     CommonMenu.newPrivateTabMenuItem(),
     CommonMenu.newPartitionedTabMenuItem(),
     CommonMenu.newWindowMenuItem()
   ]
-
-  windowActions.setContextMenuDetail(Immutable.fromJS({
-    left: contextMenuHasOverflow
-      ? contextMenuMaxVisibleWidth - contextMenuSize - rect.width
-      : rect.left,
-    top: rect.bottom + 2,
-    template: menuTemplate
-  }))
+  const menu = Menu.buildFromTemplate(menuTemplate)
+  menu.popup(getCurrentWindow())
 }
 
-function onTabsToolbarContextMenu (activeFrame, closestDestinationDetail, isParent, e) {
+function onTabsToolbarContextMenu (bookmarkTitle, bookmarkLink, closestDestinationDetail, isParent, e) {
   e.stopPropagation()
-  const tabsToolbarMenu = Menu.buildFromTemplate(tabsToolbarTemplateInit(activeFrame, closestDestinationDetail, isParent))
-  tabsToolbarMenu.popup(currentWindow)
-  tabsToolbarMenu.destroy()
+  const tabsToolbarMenu = Menu.buildFromTemplate(tabsToolbarTemplateInit(bookmarkTitle, bookmarkLink, closestDestinationDetail, isParent))
+  tabsToolbarMenu.popup(getCurrentWindow())
 }
 
 function onDownloadsToolbarContextMenu (downloadId, downloadItem, e) {
@@ -1288,29 +1274,22 @@ function onDownloadsToolbarContextMenu (downloadId, downloadItem, e) {
     e.stopPropagation()
   }
   const downloadsToolbarMenu = Menu.buildFromTemplate(downloadsToolbarTemplateInit(downloadId, downloadItem))
-  downloadsToolbarMenu.popup(currentWindow)
-  downloadsToolbarMenu.destroy()
+  downloadsToolbarMenu.popup(getCurrentWindow())
 }
 
-function onTabPageContextMenu (framePropsList, e) {
+function onUrlBarContextMenu (e) {
   e.stopPropagation()
-  const tabPageMenu = Menu.buildFromTemplate(tabPageTemplateInit(framePropsList))
-  tabPageMenu.popup(currentWindow)
-  tabPageMenu.destroy()
-}
-
-function onUrlBarContextMenu (searchDetail, activeFrame, e) {
-  e.stopPropagation()
+  const searchDetail = appStoreRenderer.state.get('searchDetail')
+  const windowState = windowStore.getState()
+  const activeFrame = getActiveFrame(windowState)
   const inputMenu = Menu.buildFromTemplate(urlBarTemplateInit(searchDetail, activeFrame, e))
-  inputMenu.popup(currentWindow)
-  inputMenu.destroy()
+  inputMenu.popup(getCurrentWindow())
 }
 
 function onFindBarContextMenu (e) {
   e.stopPropagation()
   const findBarMenu = Menu.buildFromTemplate(findBarTemplateInit(e))
-  findBarMenu.popup(currentWindow)
-  findBarMenu.destroy()
+  findBarMenu.popup(getCurrentWindow())
 }
 
 function onSiteDetailContextMenu (siteDetail, activeFrame, e) {
@@ -1318,8 +1297,7 @@ function onSiteDetailContextMenu (siteDetail, activeFrame, e) {
     e.stopPropagation()
   }
   const menu = Menu.buildFromTemplate(siteDetailTemplateInit(siteDetail, activeFrame))
-  menu.popup(currentWindow)
-  menu.destroy()
+  menu.popup(getCurrentWindow())
 }
 
 function onLedgerContextMenu (location, hostPattern) {
@@ -1334,184 +1312,44 @@ function onLedgerContextMenu (location, hostPattern) {
     }
   ]
   const menu = Menu.buildFromTemplate(template)
-  menu.popup(currentWindow)
-  menu.destroy()
+  menu.popup(getCurrentWindow())
 }
 
-function onShowBookmarkFolderMenu (bookmarks, bookmark, activeFrame, e) {
-  if (e && e.stopPropagation) {
-    e.stopPropagation()
-  }
-  const menuTemplate = showBookmarkFolderInit(bookmarks, bookmark, activeFrame)
-  const rectLeft = e.target.getBoundingClientRect()
-  const rectBottom = e.target.parentNode.getBoundingClientRect()
-  windowActions.setContextMenuDetail(Immutable.fromJS({
-    left: (rectLeft.left | 0) - 2,
-    top: (rectBottom.bottom | 0) - 1,
-    template: menuTemplate
-  }))
-}
-
-/**
- * @param {Object} usernames - map of username to plaintext password
- * @param {string} origin - origin of the form
- * @param {string} action - action of the form
- * @param {Object} boundingRect - bounding rectangle of username input field
- * @param {number} topOffset - distance from webview to the top of window
- */
-function onShowUsernameMenu (usernames, origin, action, boundingRect,
-                                    topOffset) {
-  const downloadsBarOffset = windowStore.getState().getIn(['ui', 'downloadsToolbar', 'isVisible']) ? getDownloadsBarHeight() : 0
-  const menuTemplate = usernameTemplateInit(usernames, origin, action)
-  windowActions.setContextMenuDetail(Immutable.fromJS({
-    left: boundingRect.left,
-    top: boundingRect.bottom + topOffset - downloadsBarOffset,
-    template: menuTemplate
-  }))
-}
-
-function onShowAutofillMenu (suggestions, boundingRect, frame) {
+function onShowAutofillMenu (suggestions, targetRect, frame, boundingClientRect) {
   const menuTemplate = autofillTemplateInit(suggestions, frame)
-  const downloadsBarOffset = windowStore.getState().getIn(['ui', 'downloadsToolbar', 'isVisible']) ? getDownloadsBarHeight() : 0
-  const offset = {
-    x: (window.innerWidth - boundingRect.clientWidth),
-    y: (window.innerHeight - boundingRect.clientHeight)
-  }
+  // toolbar UI scale ratio
+  const xRatio = window.innerWidth / window.outerWidth
+  const yRatio = window.innerHeight / window.outerHeight
+  const tabId = frame.get('tabId')
   windowActions.setContextMenuDetail(Immutable.fromJS({
-    left: offset.x + boundingRect.x,
-    top: offset.y + (boundingRect.y + boundingRect.height) - downloadsBarOffset,
+    type: 'autofill',
+    tabId,
+    left: boundingClientRect.left + (targetRect.x * xRatio),
+    top: boundingClientRect.top + ((targetRect.y + targetRect.height) * yRatio),
     template: menuTemplate
   }))
 }
 
-function onMoreBookmarksMenu (activeFrame, allBookmarkItems, overflowItems, e) {
-  const menuTemplate = moreBookmarksTemplateInit(allBookmarkItems, overflowItems, activeFrame)
-  const rect = e.target.getBoundingClientRect()
-  windowActions.setContextMenuDetail(Immutable.fromJS({
-    right: 0,
-    top: rect.bottom,
-    template: menuTemplate
-  }))
-}
-
-function onBackButtonHistoryMenu (activeFrame, history, target) {
-  const rect = target.parentNode.getBoundingClientRect()
-  const menuTemplate = []
-
-  if (activeFrame && history && history.entries.length > 0) {
-    const stopIndex = Math.max(((history.currentIndex - config.navigationBar.maxHistorySites) - 1), -1)
-    for (let index = (history.currentIndex - 1); index > stopIndex; index--) {
-      const url = history.entries[index].url
-
-      menuTemplate.push({
-        label: history.entries[index].display,
-        icon: history.entries[index].icon,
-        click: (e, focusedWindow) => {
-          if (eventUtil.isForSecondaryAction(e)) {
-            windowActions.newFrame({
-              location: url,
-              partitionNumber: activeFrame.props.frame.get('partitionNumber')
-            }, !!e.shiftKey)
-          } else {
-            activeFrame.goToIndex(index)
-          }
-        }
-      })
-    }
-
-    // Always display "Show History" link
-    menuTemplate.push(
-      CommonMenu.separatorMenuItem,
-      {
-        label: locale.translation('showAllHistory'),
-        click: (e, focusedWindow) => {
-          windowActions.newFrame({ location: 'about:history' })
-          windowActions.setContextMenuDetail()
-        }
-      })
-  }
-
-  windowActions.setContextMenuDetail(Immutable.fromJS({
-    left: rect.left,
-    top: rect.bottom,
-    template: menuTemplate
-  }))
-}
-
-function onForwardButtonHistoryMenu (activeFrame, history, target) {
-  const rect = target.parentNode.getBoundingClientRect()
-  const menuTemplate = []
-
-  if (activeFrame && history && history.entries.length > 0) {
-    const stopIndex = Math.min(((history.currentIndex + config.navigationBar.maxHistorySites) + 1), history.entries.length)
-    for (let index = (history.currentIndex + 1); index < stopIndex; index++) {
-      const url = history.entries[index].url
-
-      menuTemplate.push({
-        label: history.entries[index].display,
-        icon: history.entries[index].icon,
-        click: (e, focusedWindow) => {
-          if (eventUtil.isForSecondaryAction(e)) {
-            windowActions.newFrame({
-              location: url,
-              partitionNumber: activeFrame.props.frame.get('partitionNumber')
-            }, !!e.shiftKey)
-          } else {
-            activeFrame.goToIndex(index)
-          }
-        }
-      })
-    }
-
-    // Always display "Show History" link
-    menuTemplate.push(
-      CommonMenu.separatorMenuItem,
-      {
-        label: locale.translation('showAllHistory'),
-        click: (e, focusedWindow) => {
-          windowActions.newFrame({ location: 'about:history' })
-          windowActions.setContextMenuDetail()
-        }
-      })
-  }
-
-  windowActions.setContextMenuDetail(Immutable.fromJS({
-    left: rect.left,
-    top: rect.bottom,
-    template: menuTemplate
-  }))
-}
-
-function onReloadContextMenu (target) {
-  const rect = target.getBoundingClientRect()
+function onReloadContextMenu () {
   const menuTemplate = [
     CommonMenu.reloadPageMenuItem(),
     CommonMenu.cleanReloadMenuItem()
   ]
-
-  windowActions.setContextMenuDetail(Immutable.fromJS({
-    left: rect.left,
-    top: rect.bottom + 2,
-    template: menuTemplate
-  }))
+  const menu = Menu.buildFromTemplate(menuTemplate)
+  menu.popup(getCurrentWindow())
 }
 
 module.exports = {
   onHamburgerMenu,
+  onFlashContextMenu,
   onMainContextMenu,
   onTabContextMenu,
   onNewTabContextMenu,
   onTabsToolbarContextMenu,
   onDownloadsToolbarContextMenu,
-  onTabPageContextMenu,
   onUrlBarContextMenu,
   onFindBarContextMenu,
   onSiteDetailContextMenu,
-  onShowBookmarkFolderMenu,
-  onShowUsernameMenu,
   onShowAutofillMenu,
-  onMoreBookmarksMenu,
-  onBackButtonHistoryMenu,
-  onForwardButtonHistoryMenu,
   onReloadContextMenu
 }

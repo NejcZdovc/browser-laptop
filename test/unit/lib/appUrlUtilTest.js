@@ -63,6 +63,22 @@ describe('appUrlUtil test', function () {
     })
   })
 
+  describe('fileUrl', function () {
+    if (process.platform === 'win32') {
+      it('can convert Windows paths to file URLS', function () {
+        const filePath = 'C:\\Users\\bbondy\\tesT.html'
+        const fileUrl = appUrlUtil.fileUrl(filePath)
+        const expected = 'file:///C:/Users/bbondy/tesT.html'
+        assert.equal(fileUrl, expected)
+      })
+    }
+    it('can convert unix paths', function () {
+      const filePath = '/users/bbondy/tesT.html'
+      const fileUrl = appUrlUtil.fileUrl(filePath)
+      const expected = 'file:///users/bbondy/tesT.html'
+      assert.equal(fileUrl, expected)
+    })
+  })
   describe('newFrameUrl', function () {
     describe('when NEWTAB_MODE = HOMEPAGE', function () {
       it('returns the configured home page', function () {

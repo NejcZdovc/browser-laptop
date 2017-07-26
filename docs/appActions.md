@@ -33,7 +33,145 @@ Dispatches an event to the main process to create a new window.
 
 
 
-### addSite(siteDetail, tag, originalSiteDetail, destinationIsParent) 
+### frameChanged(frame) 
+
+Frame props changed
+
+**Parameters**
+
+**frame**: `Object`, Frame props changed
+
+
+
+### tabCreated(tabValue) 
+
+A new tab has been created
+
+**Parameters**
+
+**tabValue**: `Object`, A new tab has been created
+
+
+
+### tabMoved(tabId, frameOpts, browserOpts, windowId) 
+
+A tab has been moved to another window
+
+**Parameters**
+
+**tabId**: `Number`, A tab has been moved to another window
+
+**frameOpts**: `Object`, A tab has been moved to another window
+
+**browserOpts**: `Object`, A tab has been moved to another window
+
+**windowId**: `Number`, A tab has been moved to another window
+
+
+
+### createTabRequested(createProperties) 
+
+A request for a new tab has been made with the specified createProperties
+
+**Parameters**
+
+**createProperties**: `Object`, A request for a new tab has been made with the specified createProperties
+
+
+
+### loadURLRequested(tabId, url) 
+
+A request for a URL load
+
+**Parameters**
+
+**tabId**: `number`, the tab ID to load the URL inside of
+
+**url**: `string`, The url to load
+
+
+
+### loadURLInActiveTabRequested(windowId, url) 
+
+A request for a URL load for the active tab of the specified window
+
+**Parameters**
+
+**windowId**: `number`, the window ID to load the URL inside of
+
+**url**: `string`, The url to load
+
+
+
+### simpleShareActiveTabRequested(windowId, shareType) 
+
+A request for a URL email share occurred
+
+**Parameters**
+
+**windowId**: `number`, the window ID to use for the active tab
+
+**shareType**: `string`, The type of share to do, must be one of: "email", "facebook", "pinterest", "twitter", "googlePlus", "linkedIn", "buffer", "reddit", or "digg"
+
+
+
+### tabUpdated(tabValue, changeInfo) 
+
+A tab has been updated
+
+**Parameters**
+
+**tabValue**: `Object`, A tab has been updated
+
+**changeInfo**: `Object`, from chrome-tabs-updated
+
+
+
+### tabActivateRequested(tabId) 
+
+Dispatches a message to the store to set a new frame as the active frame.
+
+**Parameters**
+
+**tabId**: `Number`, the tabId to activate
+
+
+
+### tabIndexChanged(tabId, index) 
+
+Dispatches a message to the store to change the tab index
+
+**Parameters**
+
+**tabId**: `Number`, the tabId
+
+**index**: `Number`, the new index
+
+
+
+### tabCloseRequested(tabId, forceClosePinned) 
+
+Dispatches a message to close the tabId
+
+**Parameters**
+
+**tabId**: `Number`, the tabId to close
+
+**forceClosePinned**: `Boolean`, force close if pinned
+
+
+
+### tabClosed(tabId) 
+
+Notifies that a tab has been closed
+
+**Parameters**
+
+**tabId**: `number`, Notifies that a tab has been closed
+
+
+
+### addSite(siteDetail, tag, skipSync) 
 
 Adds a site to the site list
 
@@ -43,20 +181,11 @@ Adds a site to the site list
 
 **tag**: `string`, A tag to associate with the site. e.g. bookmarks.
 
-**originalSiteDetail**: `string`, If specified, the original site detail to edit / overwrite.
-
-**destinationIsParent**: `boolean`, Whether or not the destinationDetail should be considered the new parent.
-  The details of the old entries will be modified if this is set, otherwise only the tag will be added.
+**skipSync**: `boolean`, Set true if a site isn't eligible for Sync (e.g. if addSite was triggered by Sync)
 
 
 
-### clearHistory() 
-
-Clears history (all sites without tags). Indirectly called by appActions.clearAppData().
-
-
-
-### removeSite(siteDetail, tag) 
+### removeSite(siteDetail, tag, skipSync) 
 
 Removes a site from the site list
 
@@ -66,17 +195,19 @@ Removes a site from the site list
 
 **tag**: `string`, A tag to associate with the site. e.g. bookmarks.
 
+**skipSync**: `boolean`, Set true if a site isn't eligible for Sync (e.g. if this removal was triggered by Sync)
 
 
-### moveSite(sourceDetail, destinationDetail, prepend, destinationIsParent) 
+
+### moveSite(sourceKey, destinationKey, prepend, destinationIsParent) 
 
 Dispatches a message to move a site locations.
 
 **Parameters**
 
-**sourceDetail**: `string`, the location, partitionNumber, etc of the source moved site
+**sourceKey**: `string`, the source key of the source moved site
 
-**destinationDetail**: `string`, the location, partitionNumber, etc of the destination moved site
+**destinationKey**: `string`, the destination key of the destination moved site
 
 **prepend**: `boolean`, Whether or not to prepend to the destinationLocation
   If false, the destinationDetail is considered a sibling.
@@ -106,13 +237,13 @@ Dispatches a message to clear all completed downloads
 
 ### ledgerRecoverySucceeded() 
 
-Dispatches a message to clear all completed downloads
+Dispatches a message indicating ledger recovery succeeded
 
 
 
 ### ledgerRecoveryFailed() 
 
-Dispatches a message to clear all completed downloads
+Dispatches a message indicating ledger recovery failed
 
 
 
@@ -209,32 +340,6 @@ Sets the update status
 
 
 
-### savePassword(passwordDetail) 
-
-Saves login credentials
-
-**Parameters**
-
-**passwordDetail**: `Object`, login details
-
-
-
-### deletePassword(passwordDetail) 
-
-Deletes login credentials
-
-**Parameters**
-
-**passwordDetail**: `Object`, login details
-
-
-
-### clearPasswords() 
-
-Deletes all saved login credentials
-
-
-
 ### changeSetting(key, value) 
 
 Changes an application level setting
@@ -247,7 +352,7 @@ Changes an application level setting
 
 
 
-### changeSiteSetting(hostPattern, key, value, temp) 
+### changeSiteSetting(hostPattern, key, value, temp, skipSync) 
 
 Change a hostPattern's config
 
@@ -262,9 +367,11 @@ Change a hostPattern's config
 **temp**: `boolean`, Whether to change temporary or persistent
   settings. defaults to false (persistent).
 
+**skipSync**: `boolean`, Set true if a site isn't eligible for Sync (e.g. if addSite was triggered by Sync)
 
 
-### removeSiteSetting(hostPattern, key, temp) 
+
+### removeSiteSetting(hostPattern, key, temp, skipSync) 
 
 Removes a site setting
 
@@ -276,6 +383,20 @@ Removes a site setting
 
 **temp**: `boolean`, Whether to change temporary or persistent
   settings. defaults to false (persistent).
+
+**skipSync**: `boolean`, Set true if a site isn't eligible for Sync (e.g. if addSite was triggered by Sync)
+
+
+
+### setSkipSync(path, skipSync) 
+
+Changes the skipSync flag on an appState path.
+
+**Parameters**
+
+**path**: `Array.&lt;string&gt;`, Changes the skipSync flag on an appState path.
+
+**skipSync**: `boolean`, Changes the skipSync flag on an appState path.
 
 
 
@@ -289,6 +410,16 @@ Updates ledger information for the payments pane
 
 
 
+### updateLocationInfo(locationInfo) 
+
+Updates location information for the URL bar
+
+**Parameters**
+
+**locationInfo**: `object`, the current location synopsis
+
+
+
 ### updatePublisherInfo(publisherInfo) 
 
 Updates publisher information for the payments pane
@@ -299,55 +430,23 @@ Updates publisher information for the payments pane
 
 
 
-### showMessageBox(detail) 
+### showNotification(detail) 
 
-Shows a message box in the notification bar
-
-**Parameters**
-
-**detail**: `Object`, Shows a message box in the notification bar
-
-
-
-### hideMessageBox(message) 
-
-Hides a message box in the notification bar
+Shows a message in the notification bar
 
 **Parameters**
 
-**message**: `string`, Hides a message box in the notification bar
+**detail**: `Object`, Shows a message in the notification bar
 
 
 
-### clearMessageBoxes(origin) 
+### hideNotification(message) 
 
-Clears all message boxes for a given origin.
-
-**Parameters**
-
-**origin**: `string`, Clears all message boxes for a given origin.
-
-
-
-### addWord(word, learn) 
-
-Adds a word to the dictionary
+Hides a message in the notification bar
 
 **Parameters**
 
-**word**: `string`, The word to add
-
-**learn**: `boolean`, true if the word should be learned, false if ignored
-
-
-
-### setDictionary(locale) 
-
-Adds a word to the dictionary
-
-**Parameters**
-
-**locale**: `string`, The locale to set for the dictionary
+**message**: `string`, Hides a message in the notification bar
 
 
 
@@ -363,13 +462,9 @@ Adds information about pending basic auth login requests
 
 
 
-### clearAppData(clearDataDetail) 
+### onClearBrowsingData() 
 
-Clears the data specified in dataDetail
-
-**Parameters**
-
-**clearDataDetail**: `object`, the app data to clear as per doc/state.md's clearBrowsingDataDetail
+Clears the data specified in clearDataDetail
 
 
 
@@ -383,15 +478,13 @@ Import browser data specified in selected
 
 
 
-### addAutofillAddress(detail, originalDetail) 
+### addAutofillAddress(detail) 
 
 Add address data
 
 **Parameters**
 
 **detail**: `object`, the address to add as per doc/state.md's autofillAddressDetail
-
-**originalDetail**: `object`, the original address before editing
 
 
 
@@ -405,15 +498,13 @@ Remove address data
 
 
 
-### addAutofillCreditCard(detail, originalDetail) 
+### addAutofillCreditCard(detail) 
 
 Add credit card data
 
 **Parameters**
 
 **detail**: `object`, the credit card to add as per doc/state.md's autofillCreditCardDetail
-
-**originalDetail**: `object`, the original credit card before editing
 
 
 
@@ -439,13 +530,23 @@ Autofill data changed
 
 
 
-### windowBlurred(appWindowId) 
+### windowBlurred(windowId) 
 
-Dispatches a message when appWindowId loses focus
+Dispatches a message when windowId loses focus
 
 **Parameters**
 
-**appWindowId**: `Number`, the unique id of the window
+**windowId**: `Number`, the unique id of the window
+
+
+
+### windowFocused(windowId) 
+
+Dispatches a message when windowId gains focus
+
+**Parameters**
+
+**windowId**: `Number`, the unique id of the window
 
 
 
@@ -472,12 +573,6 @@ Dispatches a message when the network is disconnected
 
 
 
-### submitFeedback() 
-
-Dispatches a message to submit feedback
-
-
-
 ### defaultBrowserUpdated(useBrave) 
 
 Dispatch a message to set default browser
@@ -497,6 +592,544 @@ Dispatch a message to indicate default browser check is complete
 ### populateHistory() 
 
 Notify the AppStore to provide default history values.
+
+
+
+### dataURLCopied() 
+
+Dispatch a message to copy data URL to clipboard
+
+
+
+### shuttingDown() 
+
+Dispatches a message when the app is shutting down.
+
+
+
+### downloadRevealed(downloadId) 
+
+Dispatches a message when a download is being revealed.
+Typically this will open the download directory in finder / explorer and select the icon.
+
+**Parameters**
+
+**downloadId**: `string`, ID of the download being revealed
+
+
+
+### downloadOpened(downloadId) 
+
+Dispatches a message when a download is being opened.
+
+**Parameters**
+
+**downloadId**: `string`, ID of the download being opened
+
+
+
+### downloadActionPerformed(downloadId, downloadAction) 
+
+Dispatches a message when an electron download action is being performed (pause, resume, cancel)
+
+**Parameters**
+
+**downloadId**: `string`, ID of the download item the action is being performed to
+
+**downloadAction**: `string`, the action to perform from constants/electronDownloadItemActions.js
+
+
+
+### downloadCopiedToClipboard(downloadId) 
+
+Dispatches a message when a download URL is being copied to the clipboard
+
+**Parameters**
+
+**downloadId**: `string`, ID of the download item being copied to the clipboard
+
+
+
+### downloadDeleted(downloadId) 
+
+Dispatches a message when a download is being deleted
+
+**Parameters**
+
+**downloadId**: `string`, ID of the download item being deleted
+
+
+
+### downloadCleared(downloadId) 
+
+Dispatches a message when a download is being cleared
+
+**Parameters**
+
+**downloadId**: `string`, ID of the download item being cleared
+
+
+
+### downloadRedownloaded(downloadId) 
+
+Dispatches a message when a download is being redownloaded
+
+**Parameters**
+
+**downloadId**: `string`, ID of the download item being redownloaded
+
+
+
+### showDownloadDeleteConfirmation() 
+
+Shows delete confirmation bar in download item panel
+
+
+
+### hideDownloadDeleteConfirmation() 
+
+Hides delete confirmation bar in download item panel
+
+
+
+### clipboardTextCopied(text) 
+
+Dispatches a message when text is updated to the clipboard
+
+**Parameters**
+
+**text**: `string`, clipboard text which is copied
+
+
+
+### toggleDevTools(tabId) 
+
+Dispatches a message to toogle the dev tools on/off for the specified tabId
+
+**Parameters**
+
+**tabId**: `number`, The tabId
+
+
+
+### tabCloned(tabId, options) 
+
+Dispatches a message when a tab is being cloned
+
+**Parameters**
+
+**tabId**: `number`, The tabId of the tab to clone
+
+**options**: `object`, object containing options such as acive, back, and forward booleans
+
+
+
+### noScriptExceptionsAdded(hostPattern, origins, temporary) 
+
+Dispatches a message when noscript exceptions are added for an origin
+
+**Parameters**
+
+**hostPattern**: `string`, Dispatches a message when noscript exceptions are added for an origin
+
+**origins**: `Object.&lt;string, (boolean|number)&gt;`, Dispatches a message when noscript exceptions are added for an origin
+
+**temporary**: `boolean`, Dispatches a message when noscript exceptions are added for an origin
+
+
+
+### setObjectId(objectId, objectPath) 
+
+Dispatches a message to set objectId for a syncable object.
+
+**Parameters**
+
+**objectId**: `Array.&lt;number&gt;`, Dispatches a message to set objectId for a syncable object.
+
+**objectPath**: `Array.&lt;string&gt;`, Dispatches a message to set objectId for a syncable object.
+
+
+
+### pendingSyncRecordsAdded(records) 
+
+Add records sent with sync lib's SEND_SYNC_RECORDS to the appState
+records pending upload. After we download records via the sync lib
+we run pendingSyncRecordsRemoved.
+
+**Parameters**
+
+**records**: `Object`, Array.<object>
+
+
+
+### pendingSyncRecordsRemoved(records) 
+
+Remove records from the appState's records pending upload.
+This function is called after we download the records from the sync
+library.
+
+**Parameters**
+
+**records**: `Object`, Array.<object>
+
+
+
+### saveSyncDevices(devices) 
+
+Dispatch to update sync devices cache.
+NOTE: deviceId is a string! Normally it's Array.<number> but that can't
+be an object key. Use syncUtil.deviceIdToString()
+
+**Parameters**
+
+**devices**: `Object`, {[deviceId]: {lastRecordTimestamp=, name=}}
+
+
+
+### saveSyncInitData(seed, deviceId, lastFetchTimestamp, seedQr) 
+
+Dispatches a message when sync init data needs to be saved
+
+**Parameters**
+
+**seed**: `Array.&lt;number&gt; | null`, Dispatches a message when sync init data needs to be saved
+
+**deviceId**: `Array.&lt;number&gt; | null`, Dispatches a message when sync init data needs to be saved
+
+**lastFetchTimestamp**: `number | null`, Dispatches a message when sync init data needs to be saved
+
+**seedQr**: `string`, Dispatches a message when sync init data needs to be saved
+
+
+
+### setSyncSetupError(error) 
+
+Sets the sync setup error, or null for no error.
+
+**Parameters**
+
+**error**: `string | null`, Sets the sync setup error, or null for no error.
+
+
+
+### applySiteRecords(records) 
+
+Dispatches a message to apply a batch of site records from Brave Sync
+TODO: Refactor this to merge it into addSite/removeSite
+
+**Parameters**
+
+**records**: `Array.&lt;Object&gt;`, Dispatches a message to apply a batch of site records from Brave Sync
+TODO: Refactor this to merge it into addSite/removeSite
+
+
+
+### createSyncCache() 
+
+Dispatch to populate the sync object id -> appState key path mapping cache
+
+
+
+### resetSyncData() 
+
+Dispatches a message to delete sync data.
+
+
+
+### tabMessageBoxDismissed(tabId, detail) 
+
+Close a tab's open alert/confirm/etc (triggered by clicking OK/cancel).
+
+**Parameters**
+
+**tabId**: `number`, The tabId
+
+**detail**: `Object`, Object containing: suppressCheckbox (boolean)
+
+
+
+### tabMessageBoxUpdated(tabId, detail) 
+
+Update the detail object for the open alert/confirm/prompt (triggers re-render)
+
+**Parameters**
+
+**tabId**: `number`, The tabId
+
+**detail**: `Object`, Replacement object
+
+
+
+### navigatorHandlerRegistered(partition, protocol, location) 
+
+Action triggered by registering navigation handler
+
+**Parameters**
+
+**partition**: `string`, session partition
+
+**protocol**: `string`, navigator protocol
+
+**location**: `string`, location where handler was triggered
+
+
+
+### navigatorHandlerUnregistered(partition, protocol, location) 
+
+Action triggered by un-registering navigation handler
+
+**Parameters**
+
+**partition**: `string`, session partition
+
+**protocol**: `string`, navigator protocol
+
+**location**: `string`, location where handler was triggered
+
+
+
+### defaultDownloadPath() 
+
+Open dialog for default download path setting
+
+
+
+### enableUndefinedPublishers(publishers) 
+
+Change all undefined publishers in site settings to defined sites
+also change all undefined ledgerPayments to value true
+
+**Parameters**
+
+**publishers**: `Object`, publishers from the synopsis
+
+
+
+### changeLedgerPinnedPercentages(publishers) 
+
+Update ledger publishers pinned percentages according to the new synopsis
+
+**Parameters**
+
+**publishers**: `Object`, updated publishers
+
+
+
+### tabPinned(tabId) 
+
+Update ledger publishers pinned percentages according to the new synopsis
+Open dialog for default download path setting
+Dispatches a message when a tab is being pinned
+
+**Parameters**
+
+**tabId**: `number`, The tabId of the tab to pin
+
+
+
+### dragEnded() 
+
+Notifies the app that a drag operation stopped from within the app
+
+
+
+### dataDropped() 
+
+Notifies the app that a drop operation occurred
+
+
+
+### draggedOver() 
+
+Notifies the app that a drop operation occurred
+
+
+
+### onGoBack(tabId) 
+
+Go back in a history for a given tab
+
+**Parameters**
+
+**tabId**: `number`, Tab id used for an action
+
+
+
+### onGoForward(tabId) 
+
+Go forward in a history for a given tab
+
+**Parameters**
+
+**tabId**: `number`, Tab id used for an action
+
+
+
+### onGoToIndex(tabId, index) 
+
+Go to specific item in a history for a given tab
+
+**Parameters**
+
+**tabId**: `number`, Tab id used for an action
+
+**index**: `number`, Index in the history
+
+
+
+### onGoBackLong(tabId, rect) 
+
+Go back in a history for a given tab
+
+**Parameters**
+
+**tabId**: `number`, Tab id used for an action
+
+**rect**: `ClientRect`, Parent element position for this action
+
+
+
+### onGoForwardLong(tabId, rect) 
+
+Go forward in a history for a given tab
+
+**Parameters**
+
+**tabId**: `number`, Tab id used for an action
+
+**rect**: `ClientRect`, Parent element position for this action
+
+
+
+### dragCancelled() 
+
+Notifies the app that a drop operation was cancelled
+because ESC was pressed.
+
+
+
+### autoplayBlocked(tabId) 
+
+Notifies autoplay has been blocked
+
+**Parameters**
+
+**tabId**: `number`, Tab id of current frame
+
+
+
+### savePassword() 
+
+Handle 'save-password' event from muon
+
+
+
+### updatePassword() 
+
+Handle 'update-password' event from muon
+
+
+
+### deletePassword(passwordDetail) 
+
+Deletes login credentials
+
+**Parameters**
+
+**passwordDetail**: `Object`, login details
+
+
+
+### clearPasswords() 
+
+Deletes all saved login credentials
+
+
+
+### deletePasswordSite() 
+
+Delete legacy "never saved password" list
+
+
+
+### urlBarTextChanged(windowId, tabId, input) 
+
+Indicates that the urlbar text has changed, usually from user input
+
+**Parameters**
+
+**windowId**: `number`, The window ID the text is being changed inside of
+
+**tabId**: `number`, The tab ID the text is being changed inside of
+
+**input**: `string`, The text that was entered into the URL bar
+
+
+
+### searchSuggestionResultsAvailable(tabId, searchResults) 
+
+New URL bar suggestion search results are available.
+This is typically from a service like Duck Duck Go auto complete for the portion of text that the user typed in.
+
+**Parameters**
+
+**tabId**: `number`, the tab id for the action
+
+**searchResults**: , The search results for the currently entered URL bar text.
+
+
+
+### urlBarSuggestionsChanged(windowId, suggestionList, selectedIndex) 
+
+Indicates URL bar suggestions and selected index.
+
+**Parameters**
+
+**windowId**: `number`, the window ID
+
+**suggestionList**: `Array.&lt;Object&gt;`, The list of suggestions for the entered URL bar text. This can be generated from history, bookmarks, etc.
+
+**selectedIndex**: `number`, The index for the selected item (users can select items with down arrow on their keyboard)
+
+
+
+### urlBarSelectedIndexChanged(windowId, selectedIndex) 
+
+Indicates URL bar selected index
+
+**Parameters**
+
+**windowId**: `number`, the window ID
+
+**selectedIndex**: `number`, The index for the selected item (users can select items with down arrow on their keyboard)
+
+
+
+### defaultSearchEngineLoaded(searchDetail) 
+
+Dispatches a message to set the search engine details.
+
+**Parameters**
+
+**searchDetail**: `Object`, the search details
+
+
+
+### updateLogOpened() 
+
+Dispatches a message to indicate that the update log is being opened
+
+
+
+### onToggleBrowsingData() 
+
+Save temp setting for clear browsing data
+
+
+
+### onCancelBrowsingData() 
+
+Clear temp setting for clear browsing data
 
 
 

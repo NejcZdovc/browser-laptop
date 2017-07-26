@@ -20,14 +20,14 @@ body {
   background: #fff;
 }
 
-body, .dynamicBackground, .gradient {
+body, .dynamicBackground, bgGradient {
   opacity: 0;
   animation: fadeIn 200ms;
   animation-fill-mode: forwards;
 }
 
 .copyrightNotice {
-  -webkit-user-select: none;
+  user-select: none;
   cursor: default;
 }
 
@@ -44,22 +44,28 @@ ul {
   }
 }
 
-#appContainer > div {
-  height: auto; // overrides default #appContainer > div: 100%
-}
-
 .dynamicBackground {
   background-position: top center;
   background-repeat: no-repeat;
   background-size: cover;
   display: flex;
   flex: 1;
+
   > img {
     display: none;
   }
 }
 
 .gradient {
+  background: radial-gradient(circle farthest-corner at right bottom,#ff4444 0,rgb(9, 14, 160) 100%);
+  height: 100%;
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 100%;
+}
+
+.bgGradient {
   position: absolute;
   top: 0;
   left: 0;
@@ -81,84 +87,6 @@ ul {
   min-height: 100vh;
   padding: 40px 60px;
 
-  .statsBar {
-    padding: 40px 0;
-    display: flex;
-    justify-content: space-between;
-
-    .statsBlock {
-      margin-right: 40px;
-      margin-bottom: 20px;
-
-      span {
-        display: block;
-      }
-
-      .counter {
-        font-size: 44px;
-        line-height: 53px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        overflow: hidden;
-        max-width: 200px;
-
-        &.trackers {
-          color: @statsOrange;
-        }
-        &.ads {
-          color: @statsRed;
-        }
-        &.https {
-          color: @statsBlue;
-        }
-        &.timeSaved {
-          color: @statsLightGray;
-          display: flex;
-          align-items: baseline;
-        }
-
-        .text {
-          display: inline;
-          color: @statsLightGray;
-          font-size: 20px;
-          line-height: 24px;
-          margin-left: 3px;
-        }
-      }
-
-      .statsText {
-        font-size: 13px;
-        color: #fff;
-      }
-    }
-
-    .clock {
-      line-height: 1;
-      -webkit-user-select: none;
-      cursor: default;
-
-      .time {
-        font-size: 75px;
-        font-weight: 200;
-        color: #fff;
-      }
-
-      .timePeriod {
-        color: #fff;
-        display: inline-block;
-        font-size: 20px;
-        font-weight: 400;
-        margin-top: 6px;
-        vertical-align: top;
-      }
-
-      .dayTime {
-        font-size: 51px;
-        color: #fff;
-      }
-    }
-  }
-
   .topSitesContainer {
     width: 100%;
     text-align: right;
@@ -177,20 +105,21 @@ ul {
       cursor: default;
 
       &.hasThreeRows {
-        background: url('../../img/newtab/topsites_btn_3.svg');
+        background: url('/img/newtab/topsites_btn_3.svg');
       }
       &.hasTwoRows {
-        background: url('../../img/newtab/topsites_btn_2.svg');
+        background: url('/img/newtab/topsites_btn_2.svg');
       }
       &.hasOneRow {
-        background: url('../../img/newtab/topsites_btn_1.svg');
+        background: url('/img/newtab/topsites_btn_1.svg');
       }
     }
 
     .topSitesGrid {
-      width: 510px;
+      max-width: 510px;
       display: inline-block;
       text-align: left;
+      width: 100%;
 
       .topSiteSquareSpace {
         margin-left: 5px;
@@ -262,19 +191,20 @@ ul {
           // to avoid backgrounds with the same color as icon
           // (as seen on issue #5868)
           &:before {
-              content: '';
-              position: absolute;
-              top: 0;
-              left: 0;
-              width: 100%;
-              height: 100%;
-              background-color: #fff;
-              opacity: 0.15;
-              z-index: 0;
-              border-radius: 4px;
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #fff;
+            opacity: 0.15;
+            z-index: 0;
+            border-radius: 4px;
           }
 
           .pinnedTopSite {
+            transition: @transitionFast;
             opacity: 1;
             visibility: visible;
             position: absolute;
@@ -287,6 +217,7 @@ ul {
             display: flex;
             align-items: center;
             justify-content: center;
+            z-index: 2;
 
             .pin {
               font-size: 10px;
@@ -323,7 +254,7 @@ ul {
     margin: auto;
 
     .notification {
-      -webkit-user-select: none;
+      user-select: none;
       cursor: default;
     }
 
@@ -399,15 +330,133 @@ ul {
         }
 
         &.settingsIcon {
-          -webkit-mask-image: url('../../img/newtab/settings_prefs_btn.svg');
+          -webkit-mask-image: url('/img/newtab/settings_prefs_btn.svg');
         }
         &.bookmarksIcon {
-          -webkit-mask-image: url('../../img/newtab/bookmarks_btn.svg');
+          -webkit-mask-image: url('/img/newtab/bookmarks_btn.svg');
         }
         &.historyIcon {
-          -webkit-mask-image: url('../../img/newtab/history_btn.svg');
+          -webkit-mask-image: url('/img/newtab/history_btn.svg');
         }
       }
+    }
+  }
+}
+
+.statsBar {
+  width: 100%;
+  padding: 40px 0;
+  display: flex;
+  justify-content: space-between;
+
+  .statsBlock {
+    margin-right: 40px;
+    margin-bottom: 20px;
+
+    span {
+      display: block;
+    }
+
+    .counter {
+      font-size: 44px;
+      line-height: 53px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      overflow: hidden;
+      max-width: 200px;
+
+      &.trackers {
+        color: @statsOrange;
+      }
+      &.ads {
+        color: @statsRed;
+      }
+      &.https {
+        color: @statsBlue;
+      }
+      &.timeSaved {
+        color: @statsLightGray;
+        display: flex;
+        align-items: baseline;
+      }
+
+      .text {
+        display: inline;
+        color: @statsLightGray;
+        font-size: 20px;
+        line-height: 24px;
+        margin-left: 3px;
+      }
+    }
+
+    .statsText {
+      font-size: 13px;
+      color: #fff;
+    }
+  }
+
+  .clock {
+    line-height: 1;
+    user-select: none;
+    cursor: default;
+
+    .time {
+      font-size: 75px;
+      font-weight: 200;
+      color: #fff;
+    }
+
+    .timePeriod {
+      color: #fff;
+      display: inline-block;
+      font-size: 20px;
+      font-weight: 400;
+      margin-top: 6px;
+      vertical-align: top;
+    }
+
+    .dayTime {
+      font-size: 51px;
+      color: #fff;
+    }
+  }
+}
+
+
+@media (max-width: 730px) {
+  .dynamicBackground {
+    min-height: 100%;
+    height: initial !important;
+  }
+
+  .content {
+    min-height: 100%;
+
+    main {
+      margin-bottom: 20px;
+    }
+
+    .topSitesContainer {
+      text-align: center;
+      padding-bottom: 20px;
+    }
+  }
+
+  .statsBar {
+    flex-direction: column-reverse;
+    padding-top: 0;
+
+    .statsBlock {
+      margin: 0 0 15px;
+      width: 50%;
+      padding-right: 20px;
+    }
+
+    .clock {
+      display: flex;
+      flex: 1;
+      justify-content: center;
+      padding-bottom: 20px;
     }
   }
 }

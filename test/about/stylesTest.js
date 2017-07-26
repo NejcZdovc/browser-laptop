@@ -12,13 +12,13 @@ describe('about:styles', function () {
       .waitForUrl(Brave.newTabUrl)
       .waitForBrowserWindow()
       .waitForVisible(urlInput)
-      .waitForExist('.tab[data-frame-key="1"]')
+      .waitForExist('[data-test-id="tab"][data-frame-key="1"]')
       .tabByIndex(0)
       .loadUrl(url)
   })
 
   it('displays the title', function * () {
     yield this.app.client
-      .getText('.typography').should.eventually.be.equal('Typography')
+      .waitForTextValue('.typography', 'Typography')
   })
 })

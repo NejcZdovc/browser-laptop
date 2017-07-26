@@ -38,13 +38,12 @@ if (isDarwin) {
 
     // Package it into a dmg
     'cd ..',
-    'electron-builder "' + buildDir + '/Brave.app"' +
-      ' --platform=osx ' +
-      ' --out="' + outDir + '" ' +
-      ' --config=res/builderConfig.json ' +
-      ' --overwrite',
+    'build ' +
+      '--prepackaged="' + buildDir + '/Brave.app" ' +
+      '--mac=dmg ' +
+      ' --config=res/builderConfig.json ',
 
-     // Create an update zip
+    // Create an update zip
     'ditto -c -k --sequesterRsrc --keepParent ' + buildDir + '/Brave.app dist/Brave-' + VersionInfo.braveVersion + '.zip'
   ]
   execute(cmds, {}, console.log.bind(null, 'done'))
@@ -61,8 +60,8 @@ if (isDarwin) {
   // need to store the output files in separate directories
   outDir = path.join(outDir, arch)
 
-  var electronInstaller = require('electron-winstaller')
-  var resultPromise = electronInstaller.createWindowsInstaller({
+  var muonInstaller = require('muon-winstaller')
+  var resultPromise = muonInstaller.createWindowsInstaller({
     appDirectory: buildDir,
     outputDirectory: outDir,
     title: 'Brave',
@@ -71,12 +70,12 @@ if (isDarwin) {
     setupIcon: 'res/brave_installer.ico',
     iconUrl: 'https://brave.com/favicon.ico',
     signWithParams: format('-a -fd sha256 -f "%s" -p "%s" -t http://timestamp.verisign.com/scripts/timstamp.dll', path.resolve(cert), certPassword),
+    noMsi: true,
     exe: 'Brave.exe'
   })
   resultPromise.then(() => {
     cmds = [
-      `mv ${outDir}/Setup.exe ${outDir}/BraveSetup-${arch}.exe`,
-      `mv ${outDir}/Setup.msi ${outDir}/BraveSetup-${arch}.msi`
+      `mv ${outDir}/Setup.exe ${outDir}/BraveSetup-${arch}.exe`
     ]
     execute(cmds, {}, console.log.bind(null, 'done'))
   }, (e) => console.log(`No dice: ${e.message}`))
@@ -99,9 +98,15 @@ if (isDarwin) {
     // .tar.bz2 file
     'tar -jcvf dist/Brave.tar.bz2 ./Brave-linux-x64'
   ]
-  execute(cmds, {}, console.log.bind(null, 'done'))
+  execute(cmds, {}, (err) => {
+    if (err) {
+      console.error('buildInstaller failed', err)
+      process.exit(1)
+      return
+    }
+    console.log('done')
+  })
 } else {
   console.log('Installer not supported for platform: ' + process.platform)
   process.exit(1)
 }
-

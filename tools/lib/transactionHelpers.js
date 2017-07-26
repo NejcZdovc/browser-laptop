@@ -4,7 +4,7 @@ let generateRandomHost = require('./randomHostname')
 const SATOSHIS_PER_BTC = Math.pow(10, 8)
 
 const VALID_CURRENCY_CODE_REGEX = /^[A-Z]+$/
-const VALID_HOSTNAME_REGEX = /^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$/
+const VALID_HOSTNAME_REGEX = /^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9])$/
 
 const transactionSchema = Joi.object().keys({
   viewingId: Joi.string().guid().required().description('a unique id for the transaction'),
@@ -76,7 +76,7 @@ const generateTransaction = function () {
 }
 
 /** code for generating transaction object components **/
-const uuid = require('node-uuid')
+const uuid = require('uuid')
 const crypto = require('crypto')
 const randomBytes = crypto.randomBytes
 

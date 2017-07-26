@@ -23,7 +23,7 @@ describe('about:history', function () {
       .addSite({ location: 'https://brave.com/test', customTitle: 'customTest' })
       .addSite({ location: 'https://www.youtube.com' })
       .addSite({ location: 'https://www.facebook.com' })
-      .waitForExist('.tab[data-frame-key="1"]')
+      .waitForExist('[data-test-id="tab"][data-frame-key="1"]')
       .tabByIndex(0)
       .url(aboutHistoryUrl)
   }
@@ -35,7 +35,7 @@ describe('about:history', function () {
         location: site,
         title: 'Page 1'
       })
-      .waitForExist('.tab[data-frame-key="1"]')
+      .waitForExist('[data-test-id="tab"][data-frame-key="1"]')
       .tabByIndex(0)
       .url(aboutHistoryUrl)
   }
@@ -48,6 +48,11 @@ describe('about:history', function () {
       yield addDemoSites(this.app.client)
     })
 
+    it('does not display Brave default sites', function * () {
+      yield this.app.client
+        .waitForVisible('table.sortableTable td.title[data-sort="Brave"]')
+        .waitForElementCount('td.time', 4)
+    })
     it('displays entries with title as: title or URL', function * () {
       yield this.app.client
         .waitForVisible('table.sortableTable td.title[data-sort="Brave"]')
@@ -56,12 +61,12 @@ describe('about:history', function () {
 
     it('does NOT use customTitle when displaying entries', function * () {
       yield this.app.client
-        .waitForVisible('table.sortableTable td.title[data-sort="customTest"]', 1000, true)
+        .waitForElementCount('table.sortableTable td.title[data-sort="customTest"]', 0)
     })
 
     it('defaults to sorting table by time DESC', function * () {
       yield this.app.client
-        .waitForVisible('table.sortableTable thead tr th.sort-up div[data-l10n-id="time"]')
+        .waitForVisible('table.sortableTable .sort-default[data-sort-order="desc"] div[data-l10n-id="time"]')
     })
   })
 
@@ -177,7 +182,7 @@ describe('about:history', function () {
         .waitForVisible('table.sortableTable tr.selected td.title[data-sort="Brave"]')
         // Click the search box; this should dismiss and release selection
         .click('input#historySearch')
-        .waitForVisible('table.sortableTable tr.selected td.title[data-sort="Brave"]', 5000, true)
+        .waitForElementCount('table.sortableTable tr.selected td.title[data-sort="Brave"]', 0)
     })
     it('does not lose selection if table is sorted', function * () {
       yield this.app.client

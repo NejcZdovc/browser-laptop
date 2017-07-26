@@ -3,43 +3,49 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 'use strict'
-const AppConstants = require('../constants/appConstants')
-const WindowConstants = require('../constants/windowConstants')
+const appConstants = require('../constants/appConstants')
+const windowConstants = require('../constants/windowConstants')
 const ExtensionConstants = require('../../app/common/constants/extensionConstants')
 const AppDispatcher = require('../dispatcher/appDispatcher')
 const appConfig = require('../constants/appConfig')
 const settings = require('../constants/settings')
 const siteUtil = require('../state/siteUtil')
+const syncUtil = require('../state/syncUtil')
 const siteSettings = require('../state/siteSettings')
 const appUrlUtil = require('../lib/appUrlUtil')
 const electron = require('electron')
 const app = electron.app
-const ipcMain = electron.ipcMain
 const messages = require('../constants/messages')
 const UpdateStatus = require('../constants/updateStatus')
-const downloadStates = require('../constants/downloadStates')
 const BrowserWindow = electron.BrowserWindow
-const LocalShortcuts = require('../../app/localShortcuts')
-const appActions = require('../actions/appActions')
+const syncActions = require('../actions/syncActions')
 const firstDefinedValue = require('../lib/functional').firstDefinedValue
 const dates = require('../../app/dates')
 const getSetting = require('../settings').getSetting
 const EventEmitter = require('events').EventEmitter
 const Immutable = require('immutable')
 const diff = require('immutablediff')
-const debounce = require('../lib/debounce.js')
-const locale = require('../../app/locale')
+const debounce = require('../lib/debounce')
 const path = require('path')
-const {channel} = require('../../app/channel')
-const os = require('os')
 const autofill = require('../../app/autofill')
+const nativeImage = require('../../app/nativeImage')
+const filtering = require('../../app/filtering')
+const basicAuth = require('../../app/browser/basicAuth')
+const webtorrent = require('../../app/browser/webtorrent')
+const {calculateTopSites} = require('../../app/browser/api/topSites')
+const assert = require('assert')
+const profiles = require('../../app/browser/profiles')
+const {zoomLevel} = require('../../app/common/constants/toolbarUserInterfaceScale')
+const {initWindowCacheState} = require('../../app/sessionStoreShutdown')
 
 // state helpers
+const {makeImmutable} = require('../../app/common/state/immutableUtil')
 const basicAuthState = require('../../app/common/state/basicAuthState')
 const extensionState = require('../../app/common/state/extensionState')
-const tabState = require('../../app/common/state/tabState')
 const aboutNewTabState = require('../../app/common/state/aboutNewTabState')
 const aboutHistoryState = require('../../app/common/state/aboutHistoryState')
+const tabState = require('../../app/common/state/tabState')
+
 const isDarwin = process.platform === 'darwin'
 const isWindows = process.platform === 'win32'
 
@@ -48,8 +54,9 @@ const CHANGE_EVENT = 'app-state-change'
 
 const defaultProtocols = ['https', 'http']
 
-let appState
+let appState = null
 let lastEmittedState
+let initialized = false
 
 // TODO cleanup all this createWindow crap
 function isModal (browserOpts) {
@@ -87,7 +94,11 @@ const setWindowDimensions = (browserOpts, defaults, windowState) => {
  * Determine window position (x / y)
  */
 const setWindowPosition = (browserOpts, defaults, windowState) => {
-  if (windowState.ui && windowState.ui.position) {
+  if (browserOpts.positionByMouseCursor) {
+    const screenPos = electron.screen.getCursorScreenPoint()
+    browserOpts.x = screenPos.x
+    browserOpts.y = screenPos.y
+  } else if (windowState.ui && windowState.ui.position) {
     // Position comes from window state
     browserOpts.x = firstDefinedValue(browserOpts.x, windowState.ui.position[0])
     browserOpts.y = firstDefinedValue(browserOpts.y, windowState.ui.position[1])
@@ -103,7 +114,12 @@ const setWindowPosition = (browserOpts, defaults, windowState) => {
   return browserOpts
 }
 
-const createWindow = (browserOpts, defaults, frameOpts, windowState) => {
+const createWindow = (action) => {
+  const frameOpts = (action.frameOpts && action.frameOpts.toJS()) || {}
+  let browserOpts = (action.browserOpts && action.browserOpts.toJS()) || {}
+  const windowState = action.restoredState || {}
+  const defaults = windowDefaults()
+
   browserOpts = setWindowDimensions(browserOpts, defaults, windowState)
   browserOpts = setWindowPosition(browserOpts, defaults, windowState)
 
@@ -177,67 +193,73 @@ const createWindow = (browserOpts, defaults, frameOpts, windowState) => {
     windowProps.icon = path.join(__dirname, '..', '..', 'res', 'app.png')
   }
 
-  let mainWindow = new BrowserWindow(Object.assign(windowProps, browserOpts))
+  const homepageSetting = getSetting(settings.HOMEPAGE)
+  const startupSetting = getSetting(settings.STARTUP_MODE)
+  const toolbarUserInterfaceScale = getSetting(settings.TOOLBAR_UI_SCALE)
 
-  mainWindow.setMenuBarVisibility(true)
+  setImmediate(() => {
+    let mainWindow = new BrowserWindow(Object.assign(windowProps, browserOpts, {disposition: frameOpts.disposition}))
+    initWindowCacheState(mainWindow.id, action.restoredState)
 
-  if (windowState.ui && windowState.ui.isMaximized) {
-    mainWindow.maximize()
-  }
-
-  if (windowState.ui && windowState.ui.isFullScreen) {
-    mainWindow.setFullScreen(true)
-  }
-
-  mainWindow.on('close', function () {
-    LocalShortcuts.unregister(mainWindow)
-  })
-
-  mainWindow.on('closed', function () {
-    mainWindow = null
-  })
-
-  mainWindow.on('scroll-touch-begin', function (e) {
-    mainWindow.webContents.send('scroll-touch-begin')
-  })
-
-  mainWindow.on('scroll-touch-end', function (e) {
-    mainWindow.webContents.send('scroll-touch-end')
-  })
-
-  mainWindow.on('scroll-touch-edge', function (e) {
-    mainWindow.webContents.send('scroll-touch-edge')
-  })
-
-  mainWindow.on('enter-full-screen', function () {
-    if (mainWindow.isMenuBarVisible()) {
-      mainWindow.setMenuBarVisibility(false)
+    // initialize frames state
+    let frames = []
+    if (action.restoredState) {
+      frames = action.restoredState.frames
+      action.restoredState.frames = []
+      action.restoredState.tabs = []
+    } else {
+      if (frameOpts && Object.keys(frameOpts).length > 0) {
+        if (frameOpts.forEach) {
+          frames = frameOpts
+        } else {
+          frames.push(frameOpts)
+        }
+      } else if (startupSetting === 'homePage' && homepageSetting) {
+        frames = homepageSetting.split('|').map((homepage) => {
+          return {
+            location: homepage
+          }
+        })
+      }
     }
-  })
 
-  mainWindow.on('leave-full-screen', function () {
-    mainWindow.webContents.send(messages.LEAVE_FULL_SCREEN)
-
-    if (getSetting(settings.AUTO_HIDE_MENU) === false) {
-      mainWindow.setMenuBarVisibility(true)
+    if (frames.length === 0) {
+      frames = [{}]
     }
-  })
 
-  mainWindow.on('app-command', function (e, cmd) {
-    switch (cmd) {
-      case 'browser-backward':
-        mainWindow.webContents.send(messages.SHORTCUT_ACTIVE_FRAME_BACK)
-        return
-      case 'browser-forward':
-        mainWindow.webContents.send(messages.SHORTCUT_ACTIVE_FRAME_FORWARD)
-        return
+    if (windowState.ui && windowState.ui.isMaximized) {
+      mainWindow.maximize()
     }
+
+    if (windowState.ui && windowState.ui.isFullScreen) {
+      mainWindow.setFullScreen(true)
+    }
+
+    mainWindow.webContents.on('did-finish-load', (e) => {
+      lastEmittedState = appState
+      mainWindow.webContents.setZoomLevel(zoomLevel[toolbarUserInterfaceScale] || 0.0)
+
+      const mem = muon.shared_memory.create({
+        windowValue: {
+          disposition: frameOpts.disposition,
+          id: mainWindow.id
+        },
+        appState: appState.toJS(),
+        frames,
+        windowState: action.restoredState})
+
+      e.sender.sendShared(messages.INITIALIZE_WINDOW, mem)
+      if (action.cb) {
+        action.cb()
+      }
+    })
+
+    mainWindow.on('ready-to-show', () => {
+      mainWindow.show()
+    })
+
+    mainWindow.loadURL(appUrlUtil.getBraveExtIndexHTML())
   })
-
-  LocalShortcuts.register(mainWindow)
-
-  mainWindow.loadURL(appUrlUtil.getBraveExtIndexHTML())
-  return mainWindow
 }
 
 class AppStore extends EventEmitter {
@@ -254,8 +276,11 @@ class AppStore extends EventEmitter {
     if (lastEmittedState) {
       const d = diff(lastEmittedState, appState)
       if (!d.isEmpty()) {
-        BrowserWindow.getAllWindows().forEach((wnd) =>
-          wnd.webContents.send(messages.APP_STATE_CHANGE, { stateDiff: d.toJS() }))
+        BrowserWindow.getAllWindows().forEach((wnd) => {
+          if (wnd.webContents && !wnd.webContents.isDestroyed()) {
+            wnd.webContents.send(messages.APP_STATE_CHANGE, { stateDiff: d.toJS() })
+          }
+        })
         lastEmittedState = appState
         this.emit(CHANGE_EVENT, d.toJS())
       }
@@ -289,7 +314,9 @@ function windowDefaults () {
     windowOffset: 20,
     webPreferences: {
       sharedWorker: true,
+      nodeIntegration: false,
       partition: 'default',
+      webSecurity: false,
       allowFileAccessFromFileUrls: true,
       allowUniversalAccessFromFileUrls: true
     }
@@ -339,174 +366,124 @@ function handleChangeSettingAction (settingKey, settingValue) {
       })
       break
     case settings.DEFAULT_ZOOM_LEVEL:
-      const Filtering = require('../../app/filtering')
-      Filtering.setDefaultZoomLevel(settingValue)
+      filtering.setDefaultZoomLevel(settingValue)
       break
+    case settings.TOOLBAR_UI_SCALE: {
+      const newZoomLevel = zoomLevel[settingValue] || 0
+      BrowserWindow.getAllWindows().forEach(function (wnd) {
+        wnd.webContents.setZoomLevel(newZoomLevel)
+      })
+    } break
     default:
   }
 }
 
+let reducers = []
+
+const applyReducers = (state, action, immutableAction) => reducers.reduce(
+    (appState, reducer) => {
+      const newState = reducer(appState, action, immutableAction)
+      assert.ok(action.actionType === appConstants.APP_SET_STATE || Immutable.Map.isMap(newState),
+        `Oops! action ${action.actionType} didn't return valid state for reducer:\n\n${reducer}`)
+      return newState
+    }, appState)
+
 const handleAppAction = (action) => {
-  const ledger = require('../../app/ledger')
+  if (action.actionType === appConstants.APP_SET_STATE) {
+    reducers = [
+      require('../../app/browser/reducers/downloadsReducer'),
+      require('../../app/browser/reducers/flashReducer'),
+      require('../../app/browser/reducers/autoplayReducer'),
+      // tabs, sites and windows reducers need to stay in that order
+      // until we have a better way to manage dependencies.
+      // tabsReducer must be above dragDropReducer.
+      require('../../app/browser/reducers/tabsReducer'),
+      require('../../app/browser/reducers/sitesReducer'),
+      require('../../app/browser/reducers/windowsReducer'),
+      require('../../app/browser/reducers/syncReducer'),
+      require('../../app/browser/reducers/clipboardReducer'),
+      require('../../app/browser/reducers/urlBarSuggestionsReducer'),
+      require('../../app/browser/reducers/passwordManagerReducer'),
+      require('../../app/browser/reducers/spellCheckerReducer'),
+      require('../../app/browser/reducers/tabMessageBoxReducer'),
+      require('../../app/browser/reducers/dragDropReducer'),
+      require('../../app/browser/reducers/extensionsReducer'),
+      require('../../app/browser/reducers/shareReducer'),
+      require('../../app/browser/reducers/updatesReducer'),
+      require('../../app/browser/reducers/topSitesReducer'),
+      require('../../app/ledger').doAction,
+      require('../../app/browser/menu')
+    ]
+    initialized = true
+    appState = action.appState
+  }
+
+  if (!initialized) {
+    console.error('Action called before state was initialized: ' + action.actionType)
+    return
+  }
+
+  // maintain backwards compatibility for now by adding an additional param for immutableAction
+  const immutableAction = makeImmutable(action)
+  appState = applyReducers(appState, action, immutableAction)
 
   switch (action.actionType) {
-    case AppConstants.APP_SET_STATE:
-      appState = action.appState
+    case appConstants.APP_SET_STATE:
+      // DO NOT ADD TO THIS LIST
+      // See tabsReducer.js for app state init example
+      // TODO(bridiver) - these should be refactored into reducers
+      appState = filtering.init(appState, action, appStore)
+      appState = basicAuth.init(appState, action, appStore)
+      appState = webtorrent.init(appState, action, appStore)
+      appState = profiles.init(appState, action, appStore)
+      appState = require('../../app/sync').init(appState, action, appStore)
       break
-    case AppConstants.APP_NEW_WINDOW:
-      const frameOpts = action.frameOpts && action.frameOpts.toJS()
-      const browserOpts = (action.browserOpts && action.browserOpts.toJS()) || {}
-      const windowState = action.restoredState || {}
-
-      const mainWindow = createWindow(browserOpts, windowDefaults(), frameOpts, windowState)
-      const homepageSetting = getSetting(settings.HOMEPAGE)
-
-      // initialize frames state
-      let frames = []
-      if (frameOpts) {
-        if (frameOpts.forEach) {
-          frames = frameOpts
-        } else {
-          frames.push(frameOpts)
-        }
-      } else if (getSetting(settings.STARTUP_MODE) === 'homePage' && homepageSetting) {
-        frames = homepageSetting.split('|').map((homepage) => {
-          return {
-            location: homepage
-          }
-        })
-      }
-
-      mainWindow.webContents.on('did-finish-load', (e) => {
-        lastEmittedState = appState
-        e.sender.send(messages.INITIALIZE_WINDOW, browserOpts.disposition, appState.toJS(), frames, action.restoredState)
-        if (action.cb) {
-          action.cb()
-        }
-      })
-      mainWindow.webContents.on('crashed', (e) => {
-        console.error('Window crashed. Reloading...')
-        mainWindow.loadURL(appUrlUtil.getBraveExtIndexHTML())
-
-        ipcMain.on(messages.NOTIFICATION_RESPONSE, function notificationResponseCallback (e, message, buttonIndex, persist) {
-          if (message === locale.translation('unexpectedErrorWindowReload')) {
-            appActions.hideMessageBox(message)
-            ipcMain.removeListener(messages.NOTIFICATION_RESPONSE, notificationResponseCallback)
-          }
-        })
-
-        appActions.showMessageBox({
-          buttons: [
-            {text: locale.translation('ok')}
-          ],
-          options: {
-            persist: false
-          },
-          message: locale.translation('unexpectedErrorWindowReload')
-        })
-      })
-      mainWindow.loadURL(appUrlUtil.getBraveExtIndexHTML())
-      mainWindow.show()
+    case appConstants.APP_SHUTTING_DOWN:
+      AppDispatcher.shutdown()
+      app.quit()
       break
-    case AppConstants.APP_CLOSE_WINDOW:
-      const appWindow = BrowserWindow.fromId(action.appWindowId)
-      appWindow.close()
+    case appConstants.APP_NEW_WINDOW:
+      createWindow(action)
       break
-    case AppConstants.APP_ADD_PASSWORD:
-      // If there is already an entry for this exact origin, action, and
-      // username if it exists, update the password instead of creating a new entry
-      let passwords = appState.get('passwords').filterNot((pw) => {
-        return pw.get('origin') === action.passwordDetail.origin &&
-          pw.get('action') === action.passwordDetail.action &&
-          (!pw.get('username') || pw.get('username') === action.passwordDetail.username)
-      })
-      appState = appState.set('passwords', passwords.push(Immutable.fromJS(action.passwordDetail)))
-      break
-    case AppConstants.APP_REMOVE_PASSWORD:
-      appState = appState.set('passwords', appState.get('passwords').filterNot((pw) => {
-        return Immutable.is(pw, Immutable.fromJS(action.passwordDetail))
-      }))
-      break
-    case AppConstants.APP_CLEAR_PASSWORDS:
-      appState = appState.set('passwords', new Immutable.List())
-      break
-    case AppConstants.APP_CHANGE_NEW_TAB_DETAIL:
+    case appConstants.APP_CHANGE_NEW_TAB_DETAIL:
       appState = aboutNewTabState.mergeDetails(appState, action)
       if (action.refresh) {
-        appState = aboutNewTabState.setSites(appState, action)
+        calculateTopSites(true)
       }
       break
-    case AppConstants.APP_POPULATE_HISTORY:
+    case appConstants.APP_POPULATE_HISTORY:
       appState = aboutHistoryState.setHistory(appState, action)
       break
-    case AppConstants.APP_ADD_SITE:
+    case appConstants.APP_DATA_URL_COPIED:
+      nativeImage.copyDataURL(action.dataURL, action.html, action.text)
+      break
+    case appConstants.APP_ADD_SITE:
+    case appConstants.APP_ADD_BOOKMARK:
+    case appConstants.APP_EDIT_BOOKMARK:
       const oldSiteSize = appState.get('sites').size
-      if (action.siteDetail.constructor === Immutable.List) {
-        action.siteDetail.forEach((s) => {
-          appState = appState.set('sites', siteUtil.addSite(appState.get('sites'), s, action.tag))
-        })
-      } else {
-        appState = appState.set('sites', siteUtil.addSite(appState.get('sites'), action.siteDetail, action.tag, action.originalSiteDetail))
-      }
-      if (action.destinationDetail) {
-        appState = appState.set('sites', siteUtil.moveSite(appState.get('sites'), action.siteDetail, action.destinationDetail, false, false, true))
-      }
+      calculateTopSites(false)
+      appState = aboutHistoryState.setHistory(appState, action)
       // If there was an item added then clear out the old history entries
       if (oldSiteSize !== appState.get('sites').size) {
         filterOutNonRecents()
       }
-      appState = aboutNewTabState.setSites(appState, action)
+      break
+    case appConstants.APP_APPLY_SITE_RECORDS:
+    case appConstants.APP_REMOVE_SITE:
+      calculateTopSites(true)
       appState = aboutHistoryState.setHistory(appState, action)
       break
-    case AppConstants.APP_REMOVE_SITE:
-      appState = appState.set('sites', siteUtil.removeSite(appState.get('sites'), action.siteDetail, action.tag))
-      appState = aboutNewTabState.setSites(appState, action)
-      appState = aboutHistoryState.setHistory(appState, action)
-      break
-    case AppConstants.APP_MOVE_SITE:
-      appState = appState.set('sites', siteUtil.moveSite(appState.get('sites'), action.sourceDetail, action.destinationDetail, action.prepend, action.destinationIsParent, false))
-      break
-    case AppConstants.APP_MERGE_DOWNLOAD_DETAIL:
-      if (action.downloadDetail) {
-        appState = appState.mergeIn(['downloads', action.downloadId], action.downloadDetail)
-      } else {
-        appState = appState.deleteIn(['downloads', action.downloadId])
-      }
-      break
-    case AppConstants.APP_CLEAR_COMPLETED_DOWNLOADS:
-      if (appState.get('downloads')) {
-        const downloads = appState.get('downloads')
-          .filter((download) =>
-            ![downloadStates.COMPLETED, downloadStates.INTERRUPTED, downloadStates.CANCELLED].includes(download.get('state')))
-        appState = appState.set('downloads', downloads)
-      }
-      break
-    case AppConstants.APP_CLEAR_HISTORY:
-      appState = appState.set('sites', siteUtil.clearHistory(appState.get('sites')))
-      appState = aboutNewTabState.setSites(appState, action)
-      appState = aboutHistoryState.setHistory(appState, action)
-      break
-    case AppConstants.APP_DEFAULT_WINDOW_PARAMS_CHANGED:
-      if (action.size && action.size.size === 2) {
-        appState = appState.setIn(['defaultWindowParams', 'width'], action.size.get(0))
-        appState = appState.setIn(['defaultWindowParams', 'height'], action.size.get(1))
-      }
-      if (action.position && action.position.size === 2) {
-        appState = appState.setIn(['defaultWindowParams', 'x'], action.position.get(0))
-        appState = appState.setIn(['defaultWindowParams', 'y'], action.position.get(1))
-      }
-      break
-    case AppConstants.APP_SET_DATA_FILE_ETAG:
+    case appConstants.APP_SET_DATA_FILE_ETAG:
       appState = appState.setIn([action.resourceName, 'etag'], action.etag)
       break
-    case AppConstants.APP_UPDATE_LAST_CHECK:
+    case appConstants.APP_UPDATE_LAST_CHECK:
       appState = appState.setIn(['updates', 'lastCheckTimestamp'], (new Date()).getTime())
       appState = appState.setIn(['updates', 'lastCheckYMD'], dates.todayYMD())
       appState = appState.setIn(['updates', 'lastCheckWOY'], dates.todayWOY())
       appState = appState.setIn(['updates', 'lastCheckMonth'], dates.todayMonth())
       appState = appState.setIn(['updates', 'firstCheckMade'], true)
       break
-    case AppConstants.APP_SET_UPDATE_STATUS:
+    case appConstants.APP_SET_UPDATE_STATUS:
       if (action.status !== undefined) {
         appState = appState.setIn(['updates', 'status'], action.status)
       }
@@ -521,58 +498,108 @@ const handleAppAction = (action) => {
         app.quit()
       }
       break
-    case AppConstants.APP_SET_RESOURCE_ENABLED:
+    case appConstants.APP_SET_RESOURCE_ENABLED:
       appState = appState.setIn([action.resourceName, 'enabled'], action.enabled)
       break
-    case AppConstants.APP_RESOURCE_READY:
+    case appConstants.APP_RESOURCE_READY:
       appState = appState.setIn([action.resourceName, 'ready'], true)
       break
-    case AppConstants.APP_ADD_RESOURCE_COUNT:
+    case appConstants.APP_ADD_RESOURCE_COUNT:
       const oldCount = appState.getIn([action.resourceName, 'count']) || 0
       appState = appState.setIn([action.resourceName, 'count'], oldCount + action.count)
       break
-    case AppConstants.APP_SET_DATA_FILE_LAST_CHECK:
+    case appConstants.APP_SET_DATA_FILE_LAST_CHECK:
       appState = appState.mergeIn([action.resourceName], {
         lastCheckVersion: action.lastCheckVersion,
         lastCheckDate: action.lastCheckDate
       })
       break
-    case AppConstants.APP_CHANGE_SETTING:
+    case appConstants.APP_CHANGE_SETTING:
       appState = appState.setIn(['settings', action.key], action.value)
       handleChangeSettingAction(action.key, action.value)
       break
-    case AppConstants.APP_CHANGE_SITE_SETTING:
+    case appConstants.APP_ALLOW_FLASH_ONCE:
       {
-        let propertyName = action.temporary ? 'temporarySiteSettings' : 'siteSettings'
+        const propertyName = action.isPrivate ? 'temporarySiteSettings' : 'siteSettings'
         appState = appState.set(propertyName,
-          siteSettings.mergeSiteSetting(appState.get(propertyName), action.hostPattern, action.key, action.value))
+          siteSettings.mergeSiteSetting(appState.get(propertyName), siteUtil.getOrigin(action.url), 'flash', 1))
         break
       }
-    case AppConstants.APP_REMOVE_SITE_SETTING:
+    case appConstants.APP_ALLOW_FLASH_ALWAYS:
+      {
+        const propertyName = action.isPrivate ? 'temporarySiteSettings' : 'siteSettings'
+        const expirationTime = Date.now() + (7 * 24 * 3600 * 1000)
+        appState = appState.set(propertyName,
+          siteSettings.mergeSiteSetting(appState.get(propertyName), siteUtil.getOrigin(action.url), 'flash', expirationTime))
+        break
+      }
+    case appConstants.APP_CHANGE_SITE_SETTING:
+      {
+        let propertyName = action.temporary ? 'temporarySiteSettings' : 'siteSettings'
+        let newSiteSettings = siteSettings.mergeSiteSetting(appState.get(propertyName), action.hostPattern, action.key, action.value)
+        if (action.skipSync) {
+          newSiteSettings = newSiteSettings.setIn([action.hostPattern, 'skipSync'], true)
+        }
+        appState = appState.set(propertyName, newSiteSettings)
+        break
+      }
+    case appConstants.APP_REMOVE_SITE_SETTING:
       {
         let propertyName = action.temporary ? 'temporarySiteSettings' : 'siteSettings'
         let newSiteSettings = siteSettings.removeSiteSetting(appState.get(propertyName),
           action.hostPattern, action.key)
+        if (action.skipSync) {
+          newSiteSettings = newSiteSettings.setIn([action.hostPattern, 'skipSync'], true)
+        }
         appState = appState.set(propertyName, newSiteSettings)
         break
       }
-    case AppConstants.APP_CLEAR_SITE_SETTINGS:
+    case appConstants.APP_CLEAR_SITE_SETTINGS:
       {
         let propertyName = action.temporary ? 'temporarySiteSettings' : 'siteSettings'
         let newSiteSettings = new Immutable.Map()
         appState.get(propertyName).map((entry, hostPattern) => {
-          newSiteSettings = newSiteSettings.set(hostPattern, entry.delete(action.key))
+          let newEntry = entry.delete(action.key)
+          if (action.skipSync) {
+            newEntry = newEntry.set('skipSync', true)
+          }
+          newSiteSettings = newSiteSettings.set(hostPattern, newEntry)
         })
         appState = appState.set(propertyName, newSiteSettings)
         break
       }
-    case AppConstants.APP_UPDATE_LEDGER_INFO:
+    case appConstants.APP_SET_SKIP_SYNC:
+      {
+        if (appState.getIn(action.path)) {
+          appState = appState.setIn(action.path.concat(['skipSync']), action.skipSync)
+        }
+        break
+      }
+    case appConstants.APP_ADD_NOSCRIPT_EXCEPTIONS:
+      {
+        const propertyName = action.temporary ? 'temporarySiteSettings' : 'siteSettings'
+        // Note that this is always cleared on restart or reload, so should not
+        // be synced or persisted.
+        const key = 'noScriptExceptions'
+        if (!action.origins || !action.origins.size) {
+          // Clear the exceptions
+          appState = appState.setIn([propertyName, action.hostPattern, key], new Immutable.Map())
+        } else {
+          const currentExceptions = appState.getIn([propertyName, action.hostPattern, key]) || new Immutable.Map()
+          appState = appState.setIn([propertyName, action.hostPattern, key], currentExceptions.merge(action.origins))
+        }
+      }
+      break
+    case appConstants.APP_UPDATE_LEDGER_INFO:
       appState = appState.set('ledgerInfo', Immutable.fromJS(action.ledgerInfo))
       break
-    case AppConstants.APP_UPDATE_PUBLISHER_INFO:
+    case appConstants.APP_UPDATE_LOCATION_INFO:
+      appState = appState.set('locationInfo', Immutable.fromJS(action.locationInfo))
+      break
+    case appConstants.APP_UPDATE_PUBLISHER_INFO:
       appState = appState.set('publisherInfo', Immutable.fromJS(action.publisherInfo))
       break
-    case AppConstants.APP_SHOW_MESSAGE_BOX:
+    case appConstants.APP_SHOW_NOTIFICATION:
       let notifications = appState.get('notifications')
       notifications = notifications.filterNot((notification) => {
         let message = notification.get('message')
@@ -603,77 +630,80 @@ const handleAppAction = (action) => {
       notifications = notifications.insert(insertIndex, Immutable.fromJS(action.detail))
       appState = appState.set('notifications', notifications)
       break
-    case AppConstants.APP_HIDE_MESSAGE_BOX:
+    case appConstants.APP_HIDE_NOTIFICATION:
       appState = appState.set('notifications', appState.get('notifications').filterNot((notification) => {
         return notification.get('message') === action.message
       }))
       break
-    case AppConstants.APP_CLEAR_MESSAGE_BOXES:
-      appState = appState.set('notifications', appState.get('notifications').filterNot((notification) => {
-        return notification.get('frameOrigin') === action.origin
-      }))
-      break
-    case AppConstants.APP_ADD_WORD:
-      let listType = 'ignoredWords'
-      if (action.learn) {
-        listType = 'addedWords'
+    case appConstants.APP_TAB_CLOSE_REQUESTED:
+      const tabValue = tabState.getByTabId(appState, immutableAction.get('tabId'))
+      if (!tabValue) {
+        break
       }
-      const path = ['dictionary', listType]
-      let wordList = appState.getIn(path)
-      if (!wordList.includes(action.word)) {
-        appState = appState.setIn(path, wordList.push(action.word))
+      const origin = siteUtil.getOrigin(tabValue.get('url'))
+
+      if (origin) {
+        const tabsInOrigin = tabState.getTabs(appState).find((tabValue) =>
+          siteUtil.getOrigin(tabValue.get('url')) === origin && tabValue.get('tabId') !== immutableAction.get('tabId'))
+        if (!tabsInOrigin) {
+          appState = appState.set('notifications', appState.get('notifications').filterNot((notification) => {
+            return notification.get('frameOrigin') === origin
+          }))
+        }
       }
       break
-    case AppConstants.APP_SET_DICTIONARY:
-      appState = appState.setIn(['dictionary', 'locale'], action.locale)
+    case appConstants.APP_LEDGER_RECOVERY_STATUS_CHANGED:
+      {
+        const date = new Date().getTime()
+        appState = appState.setIn(['about', 'preferences', 'recoverySucceeded'], action.recoverySucceeded)
+        appState = appState.setIn(['about', 'preferences', 'updatedStamp'], date)
+      }
       break
-    case AppConstants.APP_BACKUP_KEYS:
-      appState = ledger.backupKeys(appState, action)
-      break
-    case AppConstants.APP_RECOVER_WALLET:
-      appState = ledger.recoverKeys(appState, action)
-      break
-    case AppConstants.APP_LEDGER_RECOVERY_SUCCEEDED:
-      appState = appState.setIn(['ui', 'about', 'preferences', 'recoverySucceeded'], true)
-      break
-    case AppConstants.APP_LEDGER_RECOVERY_FAILED:
-      appState = appState.setIn(['ui', 'about', 'preferences', 'recoverySucceeded'], false)
-      break
-    case AppConstants.APP_CLEAR_RECOVERY:
-      appState = appState.setIn(['ui', 'about', 'preferences', 'recoverySucceeded'], undefined)
-      break
-    case AppConstants.APP_CLEAR_DATA:
-      if (action.clearDataDetail.get('browserHistory')) {
-        handleAppAction({actionType: AppConstants.APP_CLEAR_HISTORY})
+    case appConstants.APP_ON_CLEAR_BROWSING_DATA:
+      const defaults = appState.get('clearBrowsingDataDefaults')
+      const temp = appState.get('tempClearBrowsingData', Immutable.Map())
+      const clearData = defaults ? defaults.merge(temp) : temp
+
+      if (clearData.get('browserHistory')) {
+        calculateTopSites(true)
+        appState = aboutHistoryState.setHistory(appState)
+        syncActions.clearHistory()
         BrowserWindow.getAllWindows().forEach((wnd) => wnd.webContents.send(messages.CLEAR_CLOSED_FRAMES))
       }
-      if (action.clearDataDetail.get('downloadHistory')) {
-        handleAppAction({actionType: AppConstants.APP_CLEAR_COMPLETED_DOWNLOADS})
+      if (clearData.get('downloadHistory')) {
+        handleAppAction({actionType: appConstants.APP_CLEAR_COMPLETED_DOWNLOADS})
       }
-      // Site cookies clearing should also clear cache so that evercookies will be properly removed
-      if (action.clearDataDetail.get('cachedImagesAndFiles') || action.clearDataDetail.get('allSiteCookies')) {
-        const Filtering = require('../../app/filtering')
-        Filtering.clearCache()
+      // Site cookies clearing should also clear cache so that every cookies will be properly removed
+      if (clearData.get('cachedImagesAndFiles') || clearData.get('allSiteCookies')) {
+        filtering.clearCache()
       }
-      if (action.clearDataDetail.get('savedPasswords')) {
-        handleAppAction({actionType: AppConstants.APP_CLEAR_PASSWORDS})
+      if (clearData.get('savedPasswords')) {
+        handleAppAction({actionType: appConstants.APP_CLEAR_PASSWORDS})
       }
-      if (action.clearDataDetail.get('allSiteCookies')) {
-        const Filtering = require('../../app/filtering')
-        Filtering.clearStorageData()
+      if (clearData.get('allSiteCookies')) {
+        filtering.clearStorageData()
       }
-      if (action.clearDataDetail.get('autocompleteData')) {
+      if (clearData.get('autocompleteData')) {
         autofill.clearAutocompleteData()
       }
-      if (action.clearDataDetail.get('autofillData')) {
+      if (clearData.get('autofillData')) {
         autofill.clearAutofillData()
       }
-      if (action.clearDataDetail.get('savedSiteSettings')) {
+      if (clearData.get('savedSiteSettings')) {
         appState = appState.set('siteSettings', Immutable.Map())
         appState = appState.set('temporarySiteSettings', Immutable.Map())
+        syncActions.clearSiteSettings()
       }
+      appState = appState.set('tempClearBrowsingData', Immutable.Map())
+      appState = appState.set('clearBrowsingDataDefaults', clearData)
       break
-    case AppConstants.APP_IMPORT_BROWSER_DATA:
+    case appConstants.APP_ON_TOGGLE_BROWSING_DATA:
+      appState = appState.setIn(['tempClearBrowsingData', action.property], action.newValue)
+      break
+    case appConstants.APP_ON_CANCEL_BROWSING_DATA:
+      appState = appState.set('tempClearBrowsingData', Immutable.Map())
+      break
+    case appConstants.APP_IMPORT_BROWSER_DATA:
       {
         const importer = require('../../app/importer')
         if (action.selected.get('type') === 5) {
@@ -685,35 +715,30 @@ const handleAppAction = (action) => {
         }
         break
       }
-    case AppConstants.APP_ADD_AUTOFILL_ADDRESS:
-      autofill.addAutofillAddress(action.detail.toJS(),
-        action.originalDetail.get('guid') === undefined ? '-1' : action.originalDetail.get('guid'))
+    case appConstants.APP_ADD_AUTOFILL_ADDRESS:
+      autofill.addAutofillAddress(action.detail)
       break
-    case AppConstants.APP_REMOVE_AUTOFILL_ADDRESS:
+    case appConstants.APP_REMOVE_AUTOFILL_ADDRESS:
       autofill.removeAutofillAddress(action.detail.get('guid'))
       break
-    case AppConstants.APP_ADD_AUTOFILL_CREDIT_CARD:
-      autofill.addAutofillCreditCard(action.detail.toJS(),
-        action.originalDetail.get('guid') === undefined ? '-1' : action.originalDetail.get('guid'))
+    case appConstants.APP_ADD_AUTOFILL_CREDIT_CARD:
+      autofill.addAutofillCreditCard(action.detail)
       break
-    case AppConstants.APP_REMOVE_AUTOFILL_CREDIT_CARD:
+    case appConstants.APP_REMOVE_AUTOFILL_CREDIT_CARD:
       autofill.removeAutofillCreditCard(action.detail.get('guid'))
       break
-    case AppConstants.APP_AUTOFILL_DATA_CHANGED:
+    case appConstants.APP_AUTOFILL_DATA_CHANGED:
       const date = new Date().getTime()
       appState = appState.setIn(['autofill', 'addresses', 'guid'], action.addressGuids)
       appState = appState.setIn(['autofill', 'addresses', 'timestamp'], date)
       appState = appState.setIn(['autofill', 'creditCards', 'guid'], action.creditCardGuids)
       appState = appState.setIn(['autofill', 'creditCards', 'timestamp'], date)
       break
-    case AppConstants.APP_SET_LOGIN_REQUIRED_DETAIL:
-      appState = basicAuthState.setLoginRequiredDetail(appState, action.tabId, action.detail)
+    case appConstants.APP_SET_LOGIN_REQUIRED_DETAIL:
+      appState = basicAuthState.setLoginRequiredDetail(appState, action)
       break
-    case AppConstants.APP_SET_LOGIN_RESPONSE_DETAIL:
-      appState = basicAuthState.setLoginResponseDetail(appState, action.tabId, action.detail)
-      break
-    case WindowConstants.WINDOW_CLOSE_FRAME:
-      appState = tabState.closeTab(appState, action.frameProps.get('tabId'))
+    case appConstants.APP_SET_LOGIN_RESPONSE_DETAIL:
+      appState = basicAuth.setLoginResponseDetail(appState, action)
       break
     case ExtensionConstants.BROWSER_ACTION_REGISTERED:
       appState = extensionState.browserActionRegistered(appState, action)
@@ -740,39 +765,29 @@ const handleAppAction = (action) => {
       process.emit('chrome-context-menus-clicked',
         action.extensionId, action.tabId, action.info.toJS())
       break
-    case AppConstants.APP_SET_MENUBAR_TEMPLATE:
+    case appConstants.APP_SET_MENUBAR_TEMPLATE:
       appState = appState.setIn(['menu', 'template'], action.menubarTemplate)
       break
-    case AppConstants.APP_UPDATE_ADBLOCK_DATAFILES:
+    case appConstants.APP_UPDATE_ADBLOCK_DATAFILES:
       const adblock = require('../../app/adBlock')
       adblock.updateAdblockDataFiles(action.uuid, action.enable)
       handleAppAction({
-        actionType: AppConstants.APP_CHANGE_SETTING,
+        actionType: appConstants.APP_CHANGE_SETTING,
         key: `adblock.${action.uuid}.enabled`,
         value: action.enable
       })
       return
-    case AppConstants.APP_UPDATE_ADBLOCK_CUSTOM_RULES: {
+    case appConstants.APP_UPDATE_ADBLOCK_CUSTOM_RULES: {
       const adblock = require('../../app/adBlock')
       adblock.updateAdblockCustomRules(action.rules)
       handleAppAction({
-        actionType: AppConstants.APP_CHANGE_SETTING,
+        actionType: appConstants.APP_CHANGE_SETTING,
         key: settings.ADBLOCK_CUSTOM_RULES,
         value: action.rules
       })
       return
     }
-    case AppConstants.APP_SUBMIT_FEEDBACK:
-      let platform = os.platform()
-      if (platform === 'darwin') {
-        platform = 'macOS'
-      } else if (platform === 'windows') {
-        platform = 'Windows'
-      }
-      const subject = encodeURIComponent(`Brave ${platform} ${os.arch()} ${app.getVersion()}${channel()} feedback`)
-      electron.shell.openExternal(`${appConfig.contactUrl}?subject=${subject}`)
-      break
-    case AppConstants.APP_DEFAULT_BROWSER_UPDATED:
+    case appConstants.APP_DEFAULT_BROWSER_UPDATED:
       if (action.useBrave) {
         for (const p of defaultProtocols) {
           app.setAsDefaultProtocolClient(p)
@@ -781,21 +796,106 @@ const handleAppAction = (action) => {
       let isDefaultBrowser = defaultProtocols.every(p => app.isDefaultProtocolClient(p))
       appState = appState.setIn(['settings', settings.IS_DEFAULT_BROWSER], isDefaultBrowser)
       break
-    case AppConstants.APP_DEFAULT_BROWSER_CHECK_COMPLETE:
+    case appConstants.APP_DEFAULT_BROWSER_CHECK_COMPLETE:
       appState = appState.set('defaultBrowserCheckComplete', {})
       break
-    case WindowConstants.WINDOW_SET_FAVICON:
-      appState = appState.set('sites', siteUtil.updateSiteFavicon(appState.get('sites'), action.frameProps.get('location'), action.favicon))
-      appState = aboutNewTabState.setSites(appState, action)
-      break
-    case WindowConstants.WINDOW_SET_NAVIGATED:
-      if (!action.isNavigatedInPage) {
-        appState = extensionState.browserActionUpdated(appState, action)
+    case windowConstants.WINDOW_SET_FAVICON:
+      appState = siteUtil.updateSiteFavicon(appState, action.frameProps.get('location'), action.favicon)
+      if (action.frameProps.get('favicon') !== action.favicon) {
+        calculateTopSites(false)
       }
       break
-    case AppConstants.APP_RENDER_URL_TO_PDF:
+    case appConstants.APP_RENDER_URL_TO_PDF:
       const pdf = require('../../app/pdf')
       appState = pdf.renderUrlToPdf(appState, action)
+      break
+    case appConstants.APP_SET_OBJECT_ID:
+      let obj = appState.getIn(action.objectPath)
+      if (obj && obj.constructor === Immutable.Map) {
+        appState = appState.setIn(action.objectPath.concat(['objectId']),
+          action.objectId)
+        // Update the site cache if this is a site
+        if (action.objectPath[0] === 'sites') {
+          appState = syncUtil.updateSiteCache(appState, obj)
+        }
+      }
+      break
+    case appConstants.APP_SAVE_SYNC_DEVICES:
+      for (let deviceId of Object.keys(action.devices)) {
+        const device = action.devices[deviceId]
+        if (device.lastRecordTimestamp) {
+          appState = appState.setIn(['sync', 'devices', deviceId, 'lastRecordTimestamp'], device.lastRecordTimestamp)
+        }
+        if (device.name) {
+          appState = appState.setIn(['sync', 'devices', deviceId, 'name'], device.name)
+        }
+      }
+      break
+    case appConstants.APP_SAVE_SYNC_INIT_DATA:
+      if (action.deviceId) {
+        appState = appState.setIn(['sync', 'deviceId'], action.deviceId)
+      }
+      if (action.seed) {
+        appState = appState.setIn(['sync', 'seed'], action.seed)
+      }
+      if (action.lastFetchTimestamp) {
+        appState = appState.setIn(['sync', 'lastFetchTimestamp'], action.lastFetchTimestamp)
+      }
+      if (action.seedQr) {
+        appState = appState.setIn(['sync', 'seedQr'], action.seedQr)
+      }
+      break
+    case appConstants.APP_SET_SYNC_SETUP_ERROR:
+      appState = appState.setIn(['sync', 'setupError'], action.error)
+      break
+    case appConstants.APP_CREATE_SYNC_CACHE:
+      appState = syncUtil.createSiteCache(appState)
+      break
+    case appConstants.APP_RESET_SYNC_DATA:
+      const sessionStore = require('../../app/sessionStore')
+      const syncDefault = Immutable.fromJS(sessionStore.defaultAppState().sync)
+      const originalSeed = appState.getIn(['sync', 'seed'])
+      appState = appState.set('sync', syncDefault)
+      appState.get('sites').forEach((site, key) => {
+        if (site.has('objectId') && syncUtil.isSyncable('bookmark', site)) {
+          // Remember which profile this bookmark was originally synced to.
+          // Since old bookmarks should be synced when a new profile is created,
+          // we have to keep track of which profile already has these bookmarks
+          // or else the old profile may have these bookmarks duplicated. #7405
+          appState = appState.setIn(['sites', key, 'originalSeed'], originalSeed)
+        }
+      })
+      appState.setIn(['sync', 'devices'], {})
+      appState.setIn(['sync', 'objectsById'], {})
+      break
+    case appConstants.APP_SHOW_DOWNLOAD_DELETE_CONFIRMATION:
+      appState = appState.set('deleteConfirmationVisible', true)
+      break
+    case appConstants.APP_HIDE_DOWNLOAD_DELETE_CONFIRMATION:
+      appState = appState.set('deleteConfirmationVisible', false)
+      break
+    case appConstants.APP_ENABLE_UNDEFINED_PUBLISHERS:
+      const sitesObject = appState.get('siteSettings')
+      Object.keys(action.publishers).map((item) => {
+        const pattern = `https?://${item}`
+        const siteSetting = sitesObject.get(pattern)
+        const result = (siteSetting) && (siteSetting.get('ledgerPayments'))
+
+        if (result === undefined) {
+          let newSiteSettings = siteSettings.mergeSiteSetting(appState.get('siteSettings'), pattern, 'ledgerPayments', true)
+          appState = appState.set('siteSettings', newSiteSettings)
+        }
+      })
+      break
+    case appConstants.APP_CHANGE_LEDGER_PINNED_PERCENTAGES:
+      Object.keys(action.publishers).map((item) => {
+        const pattern = `https?://${item}`
+        let newSiteSettings = siteSettings.mergeSiteSetting(appState.get('siteSettings'), pattern, 'ledgerPinPercentage', action.publishers[item].pinPercentage)
+        appState = appState.set('siteSettings', newSiteSettings)
+      })
+      break
+    case appConstants.APP_DEFAULT_SEARCH_ENGINE_LOADED:
+      appState = appState.set('searchDetail', action.searchDetail)
       break
     default:
   }

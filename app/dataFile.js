@@ -7,7 +7,7 @@
 const request = require('../js/lib/request')
 const fs = require('fs')
 const path = require('path')
-const urlParse = require('url').parse
+const urlParse = require('./common/urlParse')
 const app = require('electron').app
 const appConfig = require('../js/constants/appConfig')
 const appActions = require('../js/actions/appActions')
@@ -55,7 +55,7 @@ module.exports.readDataFile = (resourceName, url) => {
     fs.readFile(storagePath(url), (err, data) => {
       if (err || !data || data.length === 0) {
         // console.log('rejecting for read for resource:', resourceName)
-        reject()
+        reject(new Error('unable to read data file'))
       } else {
         // console.log('resolving for read for resource:', resourceName)
         resolve(data)
@@ -69,7 +69,7 @@ module.exports.shouldRedownloadFirst = (resourceName, version) => {
   const lastCheckDate = AppStore.getState().getIn([resourceName, 'lastCheckDate'])
   const lastCheckVersion = AppStore.getState().getIn([resourceName, 'lastCheckVersion'])
   return lastCheckVersion !== version ||
-    lastCheckDate && (new Date().getTime() - lastCheckDate) > appConfig[resourceName].msBetweenRechecks
+    (lastCheckDate && (new Date().getTime() - lastCheckDate) > appConfig[resourceName].msBetweenRechecks)
 }
 
 /**
@@ -81,12 +81,13 @@ module.exports.shouldRedownloadFirst = (resourceName, version) => {
  *   Takes either the data itself as an argument or the pathname on disk of the
  *   directory where the data was downloaded.
  */
-module.exports.init = (resourceName, startExtension, onInitDone, forceDownload) => {
-  const version = appConfig[resourceName].version
+module.exports.init = (resourceName, version, startExtension, onInitDone, forceDownload) => {
+  version = version || appConfig[resourceName].version
 
   let versionFolder = version
-  if (process.env.NODE_ENV === 'development' && resourceName === appConfig.resourceNames.ADBLOCK) {
-    versionFolder = 'test'
+  const hasStagedDatFile = [appConfig.resourceNames.ADBLOCK, appConfig.resourceNames.SAFE_BROWSING].includes(resourceName)
+  if (process.env.NODE_ENV === 'development' && hasStagedDatFile) {
+    versionFolder = `test/${versionFolder}`
   }
   const url = appConfig[resourceName].url.replace('{version}', versionFolder)
 
@@ -99,8 +100,16 @@ module.exports.init = (resourceName, startExtension, onInitDone, forceDownload) 
     // it's used directly
     // console.log('done init:', resourceName)
     cachedDataFiles[resourceName] = data
-    onInitDone(data)
-    startExtension()
+    if (onInitDone(data)) {
+      startExtension()
+    } else {
+      console.error(`Failed to deserialize data file for resource: ${resourceName}`)
+      fs.unlink(storagePath(url), (err) => {
+        if (err) {
+          console.error(`Could not remove unserializable data file for resource: ${resourceName}`)
+        }
+      })
+    }
   }
 
   const loadProcess = (resourceName, version) =>
@@ -130,10 +139,10 @@ module.exports.init = (resourceName, startExtension, onInitDone, forceDownload) 
 }
 
 module.exports.debug = (resourceName, details, shouldBlock) => {
-  if (!shouldBlock) {
-    return
-  }
   /*
+  if (!shouldBlock) {
+
+  }
   console.log('-----')
   console.log(`${resourceName} should block: `, shouldBlock)
   console.log(details.url)

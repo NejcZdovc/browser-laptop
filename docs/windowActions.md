@@ -16,38 +16,6 @@ Dispatches an event to the main process to replace the window state
 
 
 
-### loadUrl(frame, location) 
-
-Dispatches a message to the store to load a new URL.
-Both the frame's src and location properties will be updated accordingly.
-
-If the frame is a pinned site and the origin of the pinned site does
-not match the origin of the passed in location, then a new frame will be
-created for the load.
-
-In general, an iframe's src should not be updated when navigating within the frame to a new page,
-but the location should. For user entered new URLs, both should be updated.
-
-**Parameters**
-
-**frame**: `object`, The frame props
-
-**location**: `string`, The URL of the page to load
-
-
-
-### setUrl(location, key) 
-
-Dispatches a message to the store to set the new URL.
-
-**Parameters**
-
-**location**: `string`, Dispatches a message to the store to set the new URL.
-
-**key**: `number`, Dispatches a message to the store to set the new URL.
-
-
-
 ### setNavigated(location, key, isNavigatedInPage, tabId) 
 
 Dispatches a message to the store to let it know a page has been navigated.
@@ -64,28 +32,44 @@ Dispatches a message to the store to let it know a page has been navigated.
 
 
 
-### setSecurityState(frameProps, securityState) 
+### setSecurityState(tabId, securityState) 
 
 Dispatches a message to set the security state.
 
 **Parameters**
 
-**frameProps**: `Object`, The frame properties to modify.
+**tabId**: `Object`, Tab id of the frame properties to modify.
 
 **securityState**: `Object`, The security state properties that have
   changed.
 
 
 
-### setFrameTabId(frameProps, tabId) 
+### frameTabIdChanged(frameProps, oldTabId, newTabId) 
 
-Dispatches a message to set the frame tab id
+Dispatches a message to change the frame tabId
 
 **Parameters**
 
 **frameProps**: `Object`, The frame properties
 
-**tabId**: `Number`, the tab id to set
+**oldTabId**: `Number`, the current tabId
+
+**newTabId**: `Number`, the new tabId
+
+
+
+### frameGuestInstanceIdChanged(frameProps, oldGuestInstanceId, newGuestInstanceId) 
+
+Dispatches a message when the guestInstanceId changes for a frame
+
+**Parameters**
+
+**frameProps**: `Object`, The frame properties
+
+**oldGuestInstanceId**: `Number`, the current guestInstanceId
+
+**newGuestInstanceId**: `Number`, the new guestInstanceId
 
 
 
@@ -102,63 +86,27 @@ Dispatches a message to set the frame error state
 
 
 
-### setNavBarUserInput(location) 
-
-Dispatches a message to the store to set the user entered text for the URL bar.
-Unlike setLocation and loadUrl, this does not modify the state of src and location.
-
-**Parameters**
-
-**location**: `string`, The text to set as the new navbar URL input
-
-
-
-### setFrameTitle(frameProps, title) 
-
-Dispatches a message to the store to set the current frame's title.
-This should be called in response to the webview encountering a `<title>` tag.
-
-**Parameters**
-
-**frameProps**: `Object`, The frame properties to modify
-
-**title**: `string`, The title to set for the frame
-
-
-
-### setFindbarShown(frameProps, shown) 
+### setFindbarShown(frameKey, shown) 
 
 Shows/hides the find-in-page bar.
 
 **Parameters**
 
-**frameProps**: `Object`, The frame properties to modify
+**frameKey**: `number`, Key of the frame that we want to modify
 
-**shown**: `boolean`, Whether to show the findbar
-
-
-
-### setFindbarSelected(frameProps, selected) 
-
-Highlight text in the findbar
-
-**Parameters**
-
-**frameProps**: `Object`, The frame properties to modify
-
-**selected**: `boolean`, Whether to select the findbar search text
+**shown**: `boolean`, Whether to show the find bar
 
 
 
-### setPinned(frameProps, isPinned) 
+### setFindbarSelected(frameKey, selected) 
 
-Sets a frame as pinned
+Highlight text in the find bar
 
 **Parameters**
 
-**frameProps**: `Object`, The frame properties to modify
+**frameKey**: `Object`, The frame key to modify
 
-**isPinned**: `boolean`, Whether to pin or not
+**selected**: `boolean`, Whether to select the find bar search text
 
 
 
@@ -184,13 +132,13 @@ Dispatches a message to the store to indicate that the webview is done loading.
 
 
 
-### setFullScreen(frameProps, isFullScreen, showFullScreenWarning) 
+### setFullScreen(tabId, isFullScreen, showFullScreenWarning) 
 
 Dispatches a message to the store to indicate that the webview entered full screen mode.
 
 **Parameters**
 
-**frameProps**: `Object`, The frame properties to put in full screen
+**tabId**: `Object`, Tab id of the frame to put in full screen
 
 **isFullScreen**: `boolean`, true if the webview is entering full screen mode.
 
@@ -198,50 +146,37 @@ Dispatches a message to the store to indicate that the webview entered full scre
 
 
 
-### setNavBarFocused(focused) 
-
-Dispatches a message to the store to indicate if the navigation bar is focused.
-
-**Parameters**
-
-**focused**: `boolean`, true if the navigation bar should be considered as focused
-
-
-
-### newFrame(frameOpts, openInForeground) 
-
-Dispatches a message to the store to create a new frame
-
-**Parameters**
-
-**frameOpts**: `Object`, An object of frame options such as isPrivate, element, and tab features.
-                 These may not all be hooked up in Electron yet.
-
-**openInForeground**: `boolean`, true if the new frame should become the new active frame
-
-
-
-### cloneFrame(frameProps, guestInstanceId) 
-
-Dispatches a message to the store to clone an existing frame
-
-**Parameters**
-
-**frameProps**: `Object`, The properties of the frame to clone
-
-**guestInstanceId**: `number`, The guestInstanceId of the cloned webcontents
-
-
-
-### closeFrame(frames, frameProps) 
+### closeFrame(frameKey) 
 
 Dispatches a message to close a frame
 
 **Parameters**
 
-**frames**: `Array.&lt;Object&gt;`, Immutable list of of all the frames
+**frameKey**: `Object`, Frame key of the frame to close
 
-**frameProps**: `Object`, The properties of the frame to close
+
+
+### closeFrames(framePropsList) 
+
+Dispatches a message to close multiple frames
+
+**Parameters**
+
+**framePropsList**: `Array.&lt;Object&gt;`, The properties of all frames to close
+
+
+
+### closeOtherFrames(tabId, isCloseRight, isCloseLeft) 
+
+Dispatches a message to close multiple frames
+
+**Parameters**
+
+**tabId**: `string`, Frame that we want to ignore when closing all tabs
+
+**isCloseRight**: `boolean`, Close frames to the right of the frame provided
+
+**isCloseLeft**: `boolean`, Close frames to the left of the frame provided
 
 
 
@@ -258,34 +193,27 @@ Dispatches a message to the store to clear closed frames
 
 
 
-### setActiveFrame(frameProps) 
-
-Dispatches a message to the store to set a new frame as the active frame.
-
-**Parameters**
-
-**frameProps**: `Object`, the frame properties for the webview in question.
-
-
-
-### setFocusedFrame(frameProps) 
+### setFocusedFrame(location, tabId) 
 
 Dispatches a message to the store when the frame is active and the window is focused
 
 **Parameters**
 
-**frameProps**: `Object`, the frame properties for the webview in question.
+**location**: `Object`, location for the webview in question.
+
+**tabId**: `Object`, tabId for the webview in question.
 
 
 
-### setPreviewFrame(frameProps) 
+### setPreviewFrame(frameKey) 
 
 Dispatches a message to the store to set a preview frame.
-This is done when hovering over a tab.
+This should only be called internally by `WINDOW_SET_TAB_HOVER_STATE`
+when we need to delay updating the preview frame value
 
 **Parameters**
 
-**frameProps**: `Object`, the frame properties for the webview in question.
+**frameKey**: `Object`, the frame key for the webview in question.
 
 
 
@@ -296,6 +224,42 @@ Dispatches a message to the store to set the tab page index.
 **Parameters**
 
 **index**: `number`, the tab page index to change to
+
+
+
+### setTabBreakpoint(frameKey, breakpoint) 
+
+Dispatches a message to the store to set the tab breakpoint.
+
+**Parameters**
+
+**frameKey**: `Object`, the frame key for the webview in question.
+
+**breakpoint**: `string`, the tab breakpoint to change to
+
+
+
+### setTabHoverState(frameKey, hoverState) 
+
+Dispatches a message to the store to set the current tab hover state.
+
+**Parameters**
+
+**frameKey**: `Object`, the frame key for the webview in question.
+
+**hoverState**: `boolean`, whether or not mouse is over tab
+
+
+
+### setTabPageHoverState(tabPageIndex, hoverState) 
+
+Dispatches a message to the store to set the current tab hover state.
+
+**Parameters**
+
+**tabPageIndex**: `Object`, the frame key for the webview in question.
+
+**hoverState**: `boolean`, whether or not mouse is over tabPage
 
 
 
@@ -319,63 +283,48 @@ Dispatches a message to the store to set the tab page index.
 
 
 
-### updateBackForwardState(frameProps, canGoBack, canGoForward) 
-
-Dispatches a message to the store to update the back-forward information.
-
-**Parameters**
-
-**frameProps**: `Object`, the frame properties for the webview in question.
-
-**canGoBack**: `boolean`, Specifies if the active frame has previous entries in its history
-
-**canGoForward**: `boolean`, Specifies if the active frame has next entries in its history (i.e. the user pressed back at least once)
-
-
-
-### setIsBeingDraggedOverDetail(dragType, dragOverKey, dragDetail) 
-
-Dispatches a message to the store to indicate that something is dragging over this item.
-
-**Parameters**
-
-**dragType**: `string`, The type of drag operation being performed
-
-**dragOverKey**: `Object`, A unique identifier for the storage for the item being dragged over
-
-**dragDetail**: `Object`, detail about the item drag operation
-
-
-
-### moveTab(sourceFrameProps, destinationFrameProps, prepend) 
+### moveTab(sourceFrameKey, destinationFrameKey, prepend) 
 
 Dispatches a message to the store to indicate that the specified frame should move locations.
 
 **Parameters**
 
-**sourceFrameProps**: `Object`, the frame properties for the webview to move.
+**sourceFrameKey**: `Object`, the frame key for the webview to move.
 
-**destinationFrameProps**: `Object`, the frame properties for the webview to move to.
+**destinationFrameKey**: `Object`, the frame key for the webview to move to.
 
 **prepend**: `boolean`, Whether or not to prepend to the destinationFrameProps
 
 
 
-### setUrlBarSuggestions(suggestionList, selectedIndex) 
+### activeSuggestionClicked(isForSecondaryAction, shiftKey) 
 
-Sets the URL bar suggestions and selected index.
+The active URL bar suggestion was clicked
 
 **Parameters**
 
-**suggestionList**: `Array.&lt;Object&gt;`, The list of suggestions for the entered URL bar text. This can be generated from history, bookmarks, etc.
+**isForSecondaryAction**: `boolean`, Whether the secondary action is expected
+ which happens when a modifier key is pressed.
 
-**selectedIndex**: `number`, The index for the selected item (users can select items with down arrow on their keyboard)
+**shiftKey**: `boolean`, Whether the shift key is being pressed
 
 
 
-### setUrlBarAutocompleteEnabled(enabled) 
+### previousUrlBarSuggestionSelected() 
 
-Enables or disables the urlbar autocomplete.
+The previous suggestion is being selected
+
+
+
+### nextUrlBarSuggestionSelected() 
+
+The next suggestion is being selected
+
+
+
+### urlBarAutocompleteEnabled(enabled) 
+
+autocomplete for urlbar is being enabled or disabled.
 Autocomplete is defined to be the action of inserting text into the urlbar itself
 to the first item's URL match if possible.  The inserted text is auto selected so
 that the next character inserted will replace it.
@@ -387,25 +336,9 @@ This is sometimes only temporarily disabled, e.g. a user is pressing backspace.
 
 
 
-### setUrlBarSuggestionSearchResults(searchResults) 
+### urlBarSelected() 
 
-Sets the URL bar suggestion search results.
-This is typically from a service like Duck Duck Go auto complete for the portion of text that the user typed in.
-Note: This should eventually be refactored outside of the component doing XHR and into a store.
-
-**Parameters**
-
-**searchResults**: , The search results to set for the currently entered URL bar text.
-
-
-
-### setUrlBarSelected(isSelected) 
-
-Marks the URL bar text as selected or not
-
-**Parameters**
-
-**isSelected**: `boolean`, Whether or not the URL bar text input should be selected
+Indicates the URLbar has been selected
 
 
 
@@ -422,17 +355,7 @@ are no autocomplete results.
 
 
 
-### setUrlBarFocused(isFocused) 
-
-Marks the URL bar as focused or not.
-
-**Parameters**
-
-**isFocused**: `boolean`, Whether or not the URL bar should be marked as focused
-
-
-
-### setActiveFrameShortcut(frameProps, activeShortcut, activeShortcutDetails) 
+### frameShortcutChanged(frameProps, activeShortcut, activeShortcutDetails) 
 
 Dispatches a message to the store to indicate that the pending frame shortcut info should be updated.
 
@@ -447,44 +370,35 @@ set from an IPC call.
 
 
 
-### setSearchDetail(searchDetail) 
-
-Dispatches a message to set the search engine details.
-
-**Parameters**
-
-**searchDetail**: `Object`, the search details
-
-
-
-### setFindDetail(frameProps, findDetail) 
+### setFindDetail(frameKey, findDetail) 
 
 Dispatches a message to set the find-in-page details.
 
 **Parameters**
 
-**frameProps**: `Object`, Properties of the frame in question
+**frameKey**: `Object`, Frame key of the frame in question
 
 **findDetail**: `Object`, the find details
 
 
 
-### setBookmarkDetail(currentDetail, originalDetail, destinationDetail, shouldShowLocation, isBookmarkHanger) 
+### addBookmark() 
 
-Dispatches a message to set add/edit bookmark details
-If set, also indicates that add/edit is shown
+Used for displaying bookmark hanger
+when adding bookmark site or folder
 
-**Parameters**
 
-**currentDetail**: `Object`, Properties of the bookmark to change to
 
-**originalDetail**: `Object`, Properties of the bookmark to edit
+### editBookmark() 
 
-**destinationDetail**: `Object`, Will move the added bookmark to the specified position
+Used for displaying bookmark hanger
+when editing bookmark site or folder
 
-**shouldShowLocation**: `boolean`, Whether or not to show the URL input
 
-**isBookmarkHanger**: `boolean`, true if triggered from star icon in nav bar
+
+### onBookmarkClose() 
+
+Used for closing a bookmark dialog
 
 
 
@@ -510,38 +424,27 @@ If set, also indicates that the popup window is shown.
 
 
 
-### setAudioMuted(frameProps, muted) 
+### setAudioMuted(frameKey, tabId, muted) 
 
 Dispatches a message to indicate that the frame should be muted
 
 **Parameters**
 
-**frameProps**: `Object`, Properties of the frame in question
+**frameKey**: `number`, Key of the frame in question
+
+**tabId**: `number`, Id of the tab in question
 
 **muted**: `boolean`, true if the frame is muted
 
 
 
-### muteAllAudio(framePropsList, muted) 
+### muteAllAudio(frameList) 
 
-Dispatches a mute/unmute call to all frames in a provided list (used by TabList).
-
-**Parameters**
-
-**framePropsList**: `Object`, List of frame properties to consider
-
-**muted**: `boolean`, true if the frames should be muted
-
-
-
-### muteAllAudioExcept(frameToSkip) 
-
-Dispatches a mute call to all frames except the one provided.
-The provided frame will have its audio unmuted.
+Dispatches a mute/unmute call to all frames in a provided list.
 
 **Parameters**
 
-**frameToSkip**: `Object`, Properties of the frame to keep audio
+**frameList**: `Object`, List of frames to consider (frameKey and tabId)
 
 
 
@@ -597,16 +500,6 @@ This is mainly just used to trigger updates throughout React.
 
 
 
-### setMaximizeState(isMaximized) 
-
-Sets the maximize state of the window
-
-**Parameters**
-
-**isMaximized**: `boolean`, true if window is maximized
-
-
-
 ### savePosition(position) 
 
 Saves the position of the window in the window state
@@ -614,26 +507,6 @@ Saves the position of the window in the window state
 **Parameters**
 
 **position**: `Array`, [x, y]
-
-
-
-### saveSize(size) 
-
-Saves the size (width, height) of the window in the window state
-
-**Parameters**
-
-**size**: `Array`, [x, y]
-
-
-
-### setWindowFullScreen(isFullScreen) 
-
-Sets the fullscreen state of the window
-
-**Parameters**
-
-**isFullScreen**: `boolean`, true if window is fullscreen
 
 
 
@@ -701,13 +574,13 @@ for a hovered link
 
 
 
-### setBlockedBy(frameProps, blockType, location) 
+### setBlockedBy(tabId, blockType, location) 
 
 Dispatches a message to indicate the site info, such as # of blocked ads, should be shown
 
 **Parameters**
 
-**frameProps**: `object`, The frame to set blocked info on
+**tabId**: `object`, Tab id for the frame to set blocked info on
 
 **blockType**: `string`, type of the block
 
@@ -715,13 +588,13 @@ Dispatches a message to indicate the site info, such as # of blocked ads, should
 
 
 
-### setRedirectedBy(frameProps, ruleset, location) 
+### setRedirectedBy(tabId, ruleset, location) 
 
 Similar to setBlockedBy but for httpse redirects
 
 **Parameters**
 
-**frameProps**: `Object`, The frame to set blocked info on
+**tabId**: `Object`, Tab id of the frame to set blocked info on
 
 **ruleset**: `string`, Name of the HTTPS Everywhere ruleset XML file
 
@@ -729,25 +602,13 @@ Similar to setBlockedBy but for httpse redirects
 
 
 
-### setNoScript(frameProps, source) 
-
-Sets which scripts were blocked on a page.
-
-**Parameters**
-
-**frameProps**: `Object`, The frame to set blocked info on
-
-**source**: `string`, Source of blocked js
-
-
-
 ### setNoScriptVisible(isVisible) 
 
-Sets whether the noscript icon is visible.
+Sets/toggles whether the noscriptinfo dialog is visible.
 
 **Parameters**
 
-**isVisible**: `boolean`, Sets whether the noscript icon is visible.
+**isVisible**: `boolean`, if undefined, toggle the current state
 
 
 
@@ -761,9 +622,13 @@ Adds a history entry
 
 
 
-### setClearBrowsingDataDetail() 
+### setClearBrowsingDataPanelVisible(isVisible) 
 
-Sets the clear browsing data popup detail
+Sets whether the clear browsing data popup is visible
+
+**Parameters**
+
+**isVisible**: `boolean`, Sets whether the clear browsing data popup is visible
 
 
 
@@ -797,27 +662,31 @@ Widevine popup detail changed
 
 
 
-### setAutofillAddressDetail(currentDetail, originalDetail) 
+### setAutofillAddressDetail(property, newValue, wholeObject) 
 
 Sets the manage autofill address popup detail
 
 **Parameters**
 
-**currentDetail**: `Object`, Properties of the address to change to
+**property**: `string`, Property that we want change
 
-**originalDetail**: `Object`, Properties of the address to edit
+**newValue**: `string`, New value for this property
+
+**wholeObject**: `Object`, Whole object of address detail
 
 
 
-### setAutofillCreditCardDetail(currentDetail, originalDetail) 
+### setAutofillCreditCardDetail(property, newValue, wholeObject) 
 
 Sets the manage autofill credit card popup detail
 
 **Parameters**
 
-**currentDetail**: `Object`, Properties of the credit card to change to
+**property**: `string`, Property that we want change
 
-**originalDetail**: `Object`, Properties of the credit card to edit
+**newValue**: `string`, New value for this property
+
+**wholeObject**: `Object`, Whole object of credit card detail
 
 
 
@@ -867,11 +736,23 @@ Used by `main.js` when click happens on content area (not on a link or react con
 
 
 
-### setSubmenuSelectedIndex(index) 
+### setMenuBarSelectedIndex(index) 
 
 (Windows only)
-Used to track selected index of a context menu
+Used to track selected index of a menu bar
 Needed because arrow keys can be used to navigate the custom menu
+
+**Parameters**
+
+**index**: `number`, zero based index of the item.
+  Index excludes menu separators and hidden items.
+
+
+
+### setContextMenuSelectedIndex(index) 
+
+Used to track selected index of a context menu
+Needed because arrow keys can be used to navigate the context menu
 
 **Parameters**
 
@@ -915,16 +796,6 @@ Fired when the mouse clicks or hovers over a bookmark folder in the bookmarks to
 
 **folderId**: `number`, from the siteDetail for the bookmark folder
   If set to null, no menu is open. If set to -1, mouse is over a bookmark, not a folder
-
-
-
-### onFocusChanged(hasFocus) 
-
-Fired when window receives or loses focus
-
-**Parameters**
-
-**hasFocus**: `boolean`, true if focused, false if blurred
 
 
 

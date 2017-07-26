@@ -3,8 +3,19 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const React = require('react')
-const ImmutableComponent = require('../components/immutableComponent')
+const ImmutableComponent = require('../../app/renderer/components/immutableComponent')
 const {aboutUrls, isNavigatableAboutPage} = require('../lib/appUrlUtil')
+
+const cx = require('../lib/classSet')
+
+const {StyleSheet, css} = require('aphrodite/no-important')
+const globalStyles = require('../../app/renderer/components/styles/global')
+const commonStyles = require('../../app/renderer/components/styles/commonStyles')
+
+const {
+  AboutPageSectionTitle,
+  AboutPageSectionSubTitle
+} = require('../../app/renderer/components/common/sectionTitle')
 
 require('../../less/about/history.less')
 require('../../node_modules/font-awesome/css/font-awesome.css')
@@ -13,12 +24,15 @@ class AboutAbout extends ImmutableComponent {
   render () {
     return <div className='siteDetailsPage'>
       <div className='siteDetailsPageHeader'>
-        <div data-l10n-id='aboutPages' className='sectionTitle' />
+        <AboutPageSectionTitle data-l10n-id='aboutPages' />
       </div>
 
-      <div className='siteDetailsPageContent aboutAbout'>
-        <div className='sectionTitle' data-l10n-id='listOfAboutPages' />
-        <ul>
+      <div className={cx({
+        siteDetailsPageContent: true,
+        [css(commonStyles.siteDetailsPageContent)]: true
+      })}>
+        <AboutPageSectionSubTitle data-l10n-id='listOfAboutPages' />
+        <ul className={css(styles.list)}>
           {
             aboutUrls.keySeq().sort().filter((aboutSourceUrl) => isNavigatableAboutPage(aboutSourceUrl)).map((aboutSourceUrl) =>
               <li>
@@ -32,5 +46,11 @@ class AboutAbout extends ImmutableComponent {
     </div>
   }
 }
+
+const styles = StyleSheet.create({
+  list: {
+    marginLeft: globalStyles.spacing.aboutPageSectionPadding
+  }
+})
 
 module.exports = <AboutAbout />

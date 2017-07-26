@@ -1,8 +1,11 @@
 /* global describe, before, after, it */
 const siteTags = require('../../../../../js/constants/siteTags')
 const mockery = require('mockery')
+const sinon = require('sinon')
 const assert = require('assert')
 const Immutable = require('immutable')
+// This is required; commonMenu is included by menuUtil (and references electron)
+const fakeElectron = require('../../../lib/fakeElectron')
 
 require('../../../braveUnit')
 
@@ -16,8 +19,7 @@ describe('menuUtil tests', function () {
       warnOnUnregistered: false,
       useCleanCache: true
     })
-    // This is required; commonMenu is included by menuUtil (and references electron)
-    mockery.registerMock('electron', require('../../../lib/fakeElectron'))
+    mockery.registerMock('electron', fakeElectron)
     menuUtil = require('../../../../../app/common/lib/menuUtil')
     separator = require('../../../../../app/common/commonMenu').separatorMenuItem
   })
@@ -214,7 +216,8 @@ describe('menuUtil tests', function () {
       assert.equal(menuItems[2].label, windowStateClosedFrames.first().get('title'))
       assert.equal(typeof menuItems[2].click === 'function', true)
     })
-    it('only shows the last 10 items', function () {
+
+    it('shows the last 10 items in reverse order (top == last closed)', function () {
       const windowStateClosedFrames = Immutable.fromJS([
         { title: 'site01', location: 'https://brave01.com' },
         { title: 'site02', location: 'https://brave02.com' },
@@ -231,8 +234,114 @@ describe('menuUtil tests', function () {
       const menuItems = menuUtil.createRecentlyClosedTemplateItems(windowStateClosedFrames)
 
       assert.equal(menuItems.length, 12)
-      assert.equal(menuItems[2].label, windowStateClosedFrames.get(1).get('title'))
-      assert.equal(menuItems[11].label, windowStateClosedFrames.get(10).get('title'))
+      assert.equal(menuItems[11].label, windowStateClosedFrames.get(1).get('title'))
+      assert.equal(menuItems[2].label, windowStateClosedFrames.get(10).get('title'))
+    })
+
+    it('returns hidden heading menu items if lastClosedFrames is null, empty, or undefined', function () {
+      const hiddenItems = menuUtil.recentlyClosedHeadingTemplates().map((item) => {
+        item.visible = false
+        return item
+      })
+      assert.deepEqual(menuUtil.createRecentlyClosedTemplateItems(), hiddenItems)
+      assert.deepEqual(menuUtil.createRecentlyClosedTemplateItems(null), hiddenItems)
+      assert.deepEqual(menuUtil.createRecentlyClosedTemplateItems(Immutable.fromJS({})), hiddenItems)
+    })
+  })
+
+  describe('updateRecentlyClosedMenuItems', function () {
+    const url1 = 'https://brave01.com'
+    const url2 = 'https://brave02.com'
+    const url3 = 'https://brave03.com'
+    const frame1 = new Immutable.Map({title: 'site1', location: url1})
+    const frame2 = new Immutable.Map({title: 'site2', location: url2})
+    const frame3 = new Immutable.Map({title: 'site3', location: url3})
+    const frameMatcher = (frame) => {
+      return (menuItem) => {
+        return menuItem.id === menuUtil.getRecentlyClosedMenuId(frame.get('location'))
+      }
+    }
+
+    before(function () {
+      this.historyMenu = {
+        submenu: {
+          insert: sinon.spy(),
+          items: []
+        }
+      }
+      sinon.stub(menuUtil, 'getMenuItem').returns(this.historyMenu)
+    })
+
+    after(function () {
+      menuUtil.getMenuItem.restore()
+    })
+
+    it('inserts new closed frames, with more recent frames appearing first', function () {
+      let closedFrames = new Immutable.OrderedMap()
+      closedFrames = closedFrames.set(frame1.get('location'), frame1)
+      closedFrames = closedFrames.set(frame2.get('location'), frame2)
+      closedFrames = closedFrames.set(frame3.get('location'), frame3)
+      menuUtil.updateRecentlyClosedMenuItems({}, closedFrames)
+      sinon.assert.calledWith(
+        this.historyMenu.submenu.insert.getCall(0),
+        0, sinon.match(frameMatcher(frame3))
+      )
+      sinon.assert.calledWith(
+        this.historyMenu.submenu.insert.getCall(1),
+        1, sinon.match(frameMatcher(frame2))
+      )
+      sinon.assert.calledWith(
+        this.historyMenu.submenu.insert.getCall(2),
+        2, sinon.match(frameMatcher(frame1))
+      )
+    })
+
+    it('does not insert duplicate frames', function () {
+      let closedFrames = new Immutable.OrderedMap()
+      closedFrames = closedFrames.set(frame1.get('location'), frame1)
+      this.historyMenu = {
+        submenu: {
+          insert: sinon.spy(),
+          items: [
+            {
+              id: menuUtil.getRecentlyClosedMenuId(frame1.get('location')),
+              label: 'site1',
+              visible: true
+            }
+          ]
+        }
+      }
+      menuUtil.updateRecentlyClosedMenuItems({}, closedFrames)
+      assert(this.historyMenu.submenu.insert.notCalled)
+    })
+
+    it('hides closed frames which have been reopened', function () {
+      let closedFrames = new Immutable.OrderedMap()
+      closedFrames = closedFrames.set(frame1.get('location'), frame1)
+      closedFrames = closedFrames.set(frame2.get('location'), frame2)
+      this.historyMenu = {
+        submenu: {
+          insert: sinon.spy(),
+          items: [
+            {
+              id: menuUtil.getRecentlyClosedMenuId(frame2.get('location')),
+              label: 'site2',
+              visible: true
+            },
+            {
+              id: menuUtil.getRecentlyClosedMenuId(frame1.get('location')),
+              label: 'site1',
+              visible: true
+            }
+          ]
+        }
+      }
+      menuUtil.updateRecentlyClosedMenuItems({}, closedFrames)
+      sinon.assert.notCalled(this.historyMenu.submenu.insert)
+      closedFrames.delete(frame2.get('location'))
+      menuUtil.updateRecentlyClosedMenuItems({}, closedFrames)
+      assert(this.historyMenu.submenu.items[0].visible, false)
+      assert(this.historyMenu.submenu.items[1].visible, true)
     })
   })
 
@@ -244,9 +353,23 @@ describe('menuUtil tests', function () {
       assert.deepEqual(result, expectedResult)
     })
     it('removes duplicate menu separators', function () {
-      const template = [separator, separator, {label: 'lol'}]
+      const template = [{label: 'lol1'}, separator, separator, {label: 'lol2'}]
       const result = menuUtil.sanitizeTemplateItems(template)
-      const expectedResult = [separator, {label: 'lol'}]
+      const expectedResult = [{label: 'lol1'}, separator, {label: 'lol2'}]
+      assert.deepEqual(result, expectedResult)
+    })
+    it('allows l10nLabelId instead of label', function () {
+      const template = [{l10nLabelId: 'lol1'}]
+      const result = menuUtil.sanitizeTemplateItems(template)
+      const expectedResult = [{l10nLabelId: 'lol1'}]
+      assert.deepEqual(result, expectedResult)
+    })
+    it('checks submenus recursively', function () {
+      const template = [separator, {test: 'test'}, {label: 'lol'},
+        { label: 'submenu', submenu: [separator, {label: 'foo'}, {labelDataBind: 'zoomLevel'}] }]
+      const result = menuUtil.sanitizeTemplateItems(template)
+      const expectedResult = [{label: 'lol'}, {label: 'submenu', submenu: [{label: 'foo'}, {labelDataBind: 'zoomLevel'}]}]
+
       assert.deepEqual(result, expectedResult)
     })
     it('removes items which are missing label or type', function () {
@@ -265,6 +388,30 @@ describe('menuUtil tests', function () {
       const template = [{label: 'lol'}]
       const result = menuUtil.sanitizeTemplateItems(template)
       const expectedResult = [{label: 'lol'}]
+      assert.deepEqual(result, expectedResult)
+    })
+    it('does not allow the list to start with a separator', function () {
+      const template = [separator, {label: 'lol'}]
+      const result = menuUtil.sanitizeTemplateItems(template)
+      const expectedResult = [{label: 'lol'}]
+      assert.deepEqual(result, expectedResult)
+    })
+    it('does not allow the list to end with a separator', function () {
+      const template = [{label: 'lol'}, separator]
+      const result = menuUtil.sanitizeTemplateItems(template)
+      const expectedResult = [{label: 'lol'}]
+      assert.deepEqual(result, expectedResult)
+    })
+    it('does not allow only a separator', function () {
+      const template = [separator]
+      const result = menuUtil.sanitizeTemplateItems(template)
+      const expectedResult = []
+      assert.deepEqual(result, expectedResult)
+    })
+    it('supports empty arrays', function () {
+      const template = []
+      const result = menuUtil.sanitizeTemplateItems(template)
+      const expectedResult = []
       assert.deepEqual(result, expectedResult)
     })
   })

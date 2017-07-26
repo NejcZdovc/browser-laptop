@@ -4,19 +4,30 @@
 
 // Note that these are webpack requires, not CommonJS node requiring requires
 const React = require('react')
-const ImmutableComponent = require('../components/immutableComponent')
+const ImmutableComponent = require('../../app/renderer/components/immutableComponent')
 const Immutable = require('immutable')
 const urlutils = require('../lib/urlutil')
 const messages = require('../constants/messages')
 const settings = require('../constants/settings')
 const aboutActions = require('./aboutActions')
 const getSetting = require('../settings').getSetting
-const SortableTable = require('../components/sortableTable')
-const Button = require('../components/button')
+const SortableTable = require('../../app/renderer/components/common/sortableTable')
+const Button = require('../../app/renderer/components/common/button')
 const {makeImmutable} = require('../../app/common/state/immutableUtil')
 const historyUtil = require('../../app/common/lib/historyUtil')
 
-const ipc = window.chrome.ipc
+const cx = require('../lib/classSet')
+
+const ipc = window.chrome.ipcRenderer
+
+const {StyleSheet, css} = require('aphrodite/no-important')
+const globalStyles = require('../../app/renderer/components/styles/global')
+const commonStyles = require('../../app/renderer/components/styles/commonStyles')
+
+const {
+  AboutPageSectionTitle,
+  AboutPageSectionSubTitle
+} = require('../../app/renderer/components/common/sectionTitle')
 
 // Stylesheets
 require('../../less/about/history.less')
@@ -57,14 +68,16 @@ class HistoryTimeCell extends ImmutableComponent {
 class HistoryDay extends ImmutableComponent {
   navigate (entry) {
     entry = makeImmutable(entry)
-    aboutActions.newFrame({
-      location: entry.get('location'),
+    aboutActions.createTabRequested({
+      url: entry.get('location'),
       partitionNumber: entry.get('partitionNumber')
     })
   }
   render () {
     return <div>
-      <div className='sectionTitle historyDayName'>{this.props.date}</div>
+      <div className={css(styles.subTitleMargin)}>
+        <AboutPageSectionSubTitle>{this.props.date}</AboutPageSectionSubTitle>
+      </div>
       <SortableTable headings={['time', 'title', 'domain']}
         defaultHeading='time'
         defaultHeadingSortOrder='desc'
@@ -115,8 +128,8 @@ class GroupedHistoryList extends React.Component {
 }
 
 class AboutHistory extends React.Component {
-  constructor () {
-    super()
+  constructor (props) {
+    super(props)
     this.onChangeSearch = this.onChangeSearch.bind(this)
     this.onClearSearchText = this.onClearSearchText.bind(this)
     this.clearBrowsingDataNow = this.clearBrowsingDataNow.bind(this)
@@ -130,7 +143,8 @@ class AboutHistory extends React.Component {
       selection: Immutable.Set(),
       updatedStamp: undefined
     }
-    ipc.on(messages.HISTORY_UPDATED, (e, detail) => {
+    ipc.on(messages.HISTORY_UPDATED, (e, handle) => {
+      const detail = handle.memory()
       const aboutHistory = Immutable.fromJS(detail || {})
       const updatedStamp = aboutHistory.get('updatedStamp')
       // Only update if the data has changed.
@@ -193,7 +207,7 @@ class AboutHistory extends React.Component {
   render () {
     return <div className='siteDetailsPage' onClick={this.onClick}>
       <div className='siteDetailsPageHeader'>
-        <div data-l10n-id='history' className='sectionTitle' />
+        <AboutPageSectionTitle data-l10n-id='history' />
         <div className='headerActions'>
           <div className='searchWrapper'>
             <input type='text' className='searchInput' ref='historySearch' id='historySearch' value={this.state.search} onChange={this.onChangeSearch} data-l10n-id='historySearch' />
@@ -203,11 +217,19 @@ class AboutHistory extends React.Component {
               : <span className='fa fa-search searchInputPlaceholder' />
             }
           </div>
-          <Button l10nId='clearBrowsingDataNow' className='primaryButton clearBrowsingDataButton' onClick={this.clearBrowsingDataNow} />
+          <Button className='primaryButton'
+            l10nId='clearBrowsingDataNow'
+            testId='clearBrowsingDataButton'
+            onClick={this.clearBrowsingDataNow}
+          />
         </div>
       </div>
 
-      <div className='siteDetailsPageContent'>
+      <div className={cx({
+        siteDetailsPageContent: true,
+        [css(commonStyles.siteDetailsPageContent)]: true,
+        [css(commonStyles.noMarginLeft)]: true
+      })}>
         <GroupedHistoryList
           languageCodes={this.state.languageCodes}
           settings={this.state.settings}
@@ -221,5 +243,11 @@ class AboutHistory extends React.Component {
     </div>
   }
 }
+
+const styles = StyleSheet.create({
+  subTitleMargin: {
+    marginLeft: globalStyles.spacing.aboutPageSectionPadding
+  }
+})
 
 module.exports = <AboutHistory />

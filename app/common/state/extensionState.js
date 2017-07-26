@@ -2,14 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const tabState = require('./tabState')
-const {makeImmutable} = require('./immutableUtil')
+const { makeImmutable } = require('./immutableUtil')
 const Immutable = require('immutable')
-const WindowConstants = require('../../../js/constants/windowConstants')
-
-let transientFields = []
-
-tabState.addTransientFields(['browserAction'])
+const platformUtil = require('../lib/platformUtil')
 
 const browserActionDefaults = Immutable.fromJS({
   tabs: {}
@@ -22,9 +17,13 @@ const extensionState = {
   },
 
   getEnabledExtensions: (state) => {
-    return state.get('extensions').filter((installInfo, extensionId) => {
-      return installInfo.get('enabled') === true
-    })
+    const extensions = state.get('extensions')
+    if (extensions) {
+      return extensions.filter((installInfo, extensionId) => {
+        return installInfo.get('enabled') === true
+      })
+    }
+    return Immutable.fromJS([])
   },
 
   getExtensionById: (state, extensionId) => {
@@ -57,20 +56,6 @@ const extensionState = {
   browserActionUpdated: (state, action) => {
     action = makeImmutable(action)
     state = makeImmutable(state)
-    if (action.get('actionType') === WindowConstants.WINDOW_SET_NAVIGATED &&
-      action.get('tabId')) {
-      let tabId = action.get('tabId')
-      let extensions = extensionState.getEnabledExtensions(state)
-      extensions && extensions.forEach((extension) => {
-        let tabs = extension.getIn(['browserAction', 'tabs'])
-        if (tabs && tabs.get(tabId)) {
-          tabs = tabs.set(tabId, Immutable.Map())
-          extension = extension.setIn(['browserAction', 'tabs'], tabs)
-          state = state.setIn(['extensions', extension.get('id')], extension)
-        }
-      })
-      return state
-    }
     let extensionId = action.get('extensionId').toString()
     let extension = extensionState.getExtensionById(state, extensionId)
     if (extension && extension.get('browserAction')) {
@@ -91,14 +76,20 @@ const extensionState = {
 
   browserActionBackgroundImage: (browserAction, tabId) => {
     tabId = tabId ? tabId.toString() : '-1'
-    if (browserAction.get('base_path')) {
-      if (browserAction.getIn(['tabs', tabId, 'path', '19']) && browserAction.getIn(['tabs', tabId, 'path', '38'])) {
-        return '-webkit-image-set(url(\'' + browserAction.get('base_path') + '/' + browserAction.getIn(['tabs', tabId, 'path', '19']) +
-          '\') 1x, url(\'' + browserAction.get('base_path') + '/' + browserAction.getIn(['tabs', tabId, 'path', '38']) + '\') 2x'
+    let path = browserAction.getIn(['tabs', tabId, 'path']) || browserAction.get('path')
+    let basePath = browserAction.get('base_path')
+    if (path && basePath) {
+      // Older extensions may provide a string path
+      if (typeof path === 'string') {
+        return `-webkit-image-set(
+                  url(${basePath}/${path}) 1x`
       }
-      if (browserAction.getIn(['path', '19']) && browserAction.getIn(['path', '38'])) {
-        return '-webkit-image-set(url(\'' + browserAction.get('base_path') + '/' + browserAction.getIn(['path', '19']) +
-          '\') 1x, url(\'' + browserAction.get('base_path') + '/' + browserAction.getIn(['path', '38']) + '\') 2x'
+      let basePath19 = path.get('19')
+      let basePath38 = path.get('38')
+      if (basePath19 && basePath38) {
+        return `-webkit-image-set(
+                  url(${basePath}/${basePath19}) 1x,
+                  url(${basePath}/${basePath38}) 2x`
       }
     }
     return ''
@@ -109,6 +100,20 @@ const extensionState = {
     state = makeImmutable(state)
     let extensionId = action.get('extensionId').toString()
     return state.setIn(['extensions', extensionId], action.get('installInfo'))
+  },
+
+  extensionUninstalled: (state, action) => {
+    action = makeImmutable(action)
+    state = makeImmutable(state)
+    let extensionId = action.get('extensionId').toString()
+    let extension = extensionState.getExtensionById(state, extensionId)
+    // Since we populate uninstalled extensions with dummyContent,
+    // removing installInfo would just add dummy data instead of removing it
+    // so we add a prop called 'excluded' and use it to hide extension on UI
+    if (extension) {
+      return state.setIn(['extensions', extensionId], extension.set('excluded', true))
+    }
+    return state
   },
 
   extensionEnabled: (state, action) => {
@@ -135,10 +140,6 @@ const extensionState = {
     }
   },
 
-  getTransientFields: () => {
-    return transientFields
-  },
-
   getPersistentTabState: (extension) => {
     extension = makeImmutable(extension)
     extensionState.getTransientFields().forEach((field) => {
@@ -157,20 +158,25 @@ const extensionState = {
         state = state.setIn(['extensions', action.get('extensionId'), 'contextMenus'], new Immutable.List())
       }
       let contextMenus = state.getIn(['extensions', action.get('extensionId'), 'contextMenus'])
-      let basePath = state.getIn(['extensions', action.get('extensionId'), 'base_path'])
-      basePath = decodeURI(basePath)
-      if (process.platform === 'win32') {
-        basePath = basePath.replace('file:///', '')
+      const basePath =
+        platformUtil.getPathFromFileURI(state.getIn(['extensions', action.get('extensionId'), 'base_path']))
+      const iconPath = action.get('icon')
+      if (!iconPath) {
+        contextMenus = contextMenus.push({
+          extensionId: action.get('extensionId'),
+          menuItemId: action.get('menuItemId'),
+          properties: action.get('properties').toJS()
+        })
       } else {
-        basePath = basePath.replace('file://', '')
-      }
-      return state.setIn(['extensions', action.get('extensionId'), 'contextMenus'],
-        contextMenus.push({
+        contextMenus = contextMenus.push({
           extensionId: action.get('extensionId'),
           menuItemId: action.get('menuItemId'),
           properties: action.get('properties').toJS(),
-          icon: basePath + '/' + action.get('icon')
-        }))
+          icon: basePath + '/' + iconPath
+        })
+      }
+      return state.setIn(['extensions', action.get('extensionId'), 'contextMenus'],
+        contextMenus)
     } else {
       return state
     }

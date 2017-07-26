@@ -4,8 +4,10 @@
 
 'use strict'
 
-const getWebview = () =>
-  document.querySelector('.frameWrapper.isActive webview')
+const getWebview = (key) =>
+  key
+  ? document.querySelector(`webview[data-frame-key="${key}"]`)
+  : document.querySelector('.frameWrapper.isActive webview')
 
 const webviewActions = {
   /**
@@ -31,13 +33,12 @@ const webviewActions = {
   },
 
   /**
-   * Replaces the selected text in an editable
-   * @param {string} text - The text to replace with
+   * Shows the certificate infomation
    */
-  replace: function (text) {
+  showCertificate: function () {
     const webview = getWebview()
     if (webview) {
-      webview.replaceMisspelling(text)
+      webview.showCertificate()
     }
   },
 
@@ -48,21 +49,6 @@ const webviewActions = {
     const webview = getWebview()
     if (webview) {
       webview.showDefinitionForSelection()
-    }
-  },
-
-  /**
-   * Set/unset webkit fullscreen status
-   * @param {Boolean} isFullScreen - fullscreen state to go to
-   */
-  setFullScreen: function (isFullScreen) {
-    const webview = getWebview()
-    if (webview) {
-      if (!isFullScreen) {
-        webview.executeJavaScript('document.webkitExitFullscreen()')
-      } else {
-        webview.executeJavaScript('document.webkitRequestFullscreen()')
-      }
     }
   },
 

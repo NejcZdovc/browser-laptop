@@ -7,15 +7,21 @@ const path = require('path')
 const UrlUtil = require('./urlutil')
 const config = require('../constants/config')
 
-module.exports.fileUrl = (str) => {
-  var pathName = path.resolve(str).replace(/\\/g, '/')
+module.exports.fileUrl = (filePath) => {
+  // It's preferrable to call path.resolve but it's not available
+  // because process.cwd doesn't exist in renderers like in file URL
+  // drops in the URL bar.
+  if (!path.isAbsolute(filePath) && process.cwd) {
+    filePath = path.resolve(filePath)
+  }
+  let fileUrlPath = filePath.replace(/\\/g, '/')
 
   // Windows drive letter must be prefixed with a slash
-  if (pathName[0] !== '/') {
-    pathName = '/' + pathName
+  if (fileUrlPath[0] !== '/') {
+    fileUrlPath = '/' + fileUrlPath
   }
 
-  return encodeURI('file://' + pathName)
+  return encodeURI('file://' + fileUrlPath)
 }
 
 /**
@@ -66,7 +72,7 @@ module.exports.getGenDir = function (url) {
 
 module.exports.getBraveIndexPath = function (relateivePath = '') {
   return module.exports.fileUrl(
-      path.resolve(__dirname, '..', '..') + '/app/extensions/brave/' + relateivePath)
+      path.resolve(__dirname, '..', '..') + '/app/extensions/brave/' + relateivePath).replace('file://', 'chrome://brave')
 }
 
 module.exports.getBraveExtIndexHTML = function () {
@@ -95,14 +101,14 @@ module.exports.aboutUrls = new Immutable.Map({
   'about:downloads': module.exports.getBraveExtUrl('about-downloads.html'),
   'about:error': module.exports.getBraveExtUrl('about-error.html'),
   'about:extensions': module.exports.getBraveExtUrl('about-extensions.html'),
-  'about:flash': module.exports.getBraveExtUrl('about-flash.html'),
   'about:history': module.exports.getBraveExtUrl('about-history.html'),
   'about:newtab': module.exports.getBraveExtUrl('about-newtab.html'),
   'about:passwords': module.exports.getBraveExtUrl('about-passwords.html'),
   'about:preferences': module.exports.getBraveExtUrl('about-preferences.html'),
   'about:safebrowsing': module.exports.getBraveExtUrl('about-safebrowsing.html'),
   'about:styles': module.exports.getBraveExtUrl('about-styles.html'),
-  'about:contributions': module.exports.getBraveExtUrl('about-contributions.html')
+  'about:contributions': module.exports.getBraveExtUrl('about-contributions.html'),
+  'about:welcome': module.exports.getBraveExtUrl('about-welcome.html')
 })
 
 module.exports.isIntermediateAboutPage = (location) =>
@@ -112,7 +118,7 @@ module.exports.isNotImplementedAboutPage = (location) =>
   ['about:config'].includes(getBaseUrl(location))
 
 module.exports.isNavigatableAboutPage = (location) =>
-  !module.exports.isIntermediateAboutPage(location) && !module.exports.isNotImplementedAboutPage(location) && !['about:newtab', 'about:blank', 'about:flash', 'about:contributions'].includes(getBaseUrl(location))
+  !module.exports.isIntermediateAboutPage(location) && !module.exports.isNotImplementedAboutPage(location) && !['about:newtab', 'about:blank', 'about:contributions'].includes(getBaseUrl(location))
 
 // Map of target URLs mapped to source about: URLs
 const aboutUrlsReverse = new Immutable.Map(module.exports.aboutUrls.reduce((obj, v, k) => {
@@ -126,8 +132,11 @@ const aboutUrlsReverse = new Immutable.Map(module.exports.aboutUrls.reduce((obj,
  * about:blank -> http://localhost:8000/about-blank/index.html
  */
 module.exports.getTargetAboutUrl = function (input) {
-  const hash = getHash(input)
   const url = module.exports.aboutUrls.get(getBaseUrl(input))
+  if (!url) {
+    return url
+  }
+  const hash = getHash(input)
   return hash && url ? [url, hash].join('#') : url
 }
 
@@ -137,9 +146,12 @@ module.exports.getTargetAboutUrl = function (input) {
  * http://localhost:8000/about-blank.html -> about:blank
  */
 module.exports.getSourceAboutUrl = function (input) {
-  const hash = getHash(input)
   const url = aboutUrlsReverse.get(getBaseUrl(input))
-  return hash && url ? [url, hash].join('#') : url
+  if (!url) {
+    return url
+  }
+  const hash = getHash(input)
+  return hash ? [url, hash].join('#') : url
 }
 
 /**
@@ -164,7 +176,9 @@ module.exports.isTargetAboutUrl = function (input) {
  * Example: getTargetMagnetUrl('magnet:...') -> 'chrome-extension://<...>.html#magnet:...'
  */
 module.exports.getTargetMagnetUrl = function (input) {
-  if (!input.startsWith('magnet:')) return null
+  if (!input.startsWith('magnet:')) {
+    return null
+  }
   const url = module.exports.getTorrentExtUrl('webtorrent.html')
   return [url, input].join('#')
 }
@@ -176,7 +190,7 @@ module.exports.getTargetMagnetUrl = function (input) {
  */
 module.exports.getSourceMagnetUrl = function (input) {
   if (getBaseUrl(input) !== module.exports.getTorrentExtUrl('webtorrent.html')) return null
-  const url = getHash(input)
+  const url = decodeURIComponent(getHash(input))
   return url
 }
 
@@ -201,7 +215,6 @@ module.exports.isTargetMagnetUrl = function (input) {
  * @param {string} input
  */
 module.exports.isUrl = function (input) {
-  input = input.trim()
   return UrlUtil.isURL(input)
 }
 
@@ -220,7 +233,7 @@ function getHash (input) {
   return (typeof input === 'string') ? input.split('#')[1] : ''
 }
 
-module.exports.navigatableTypes = ['http:', 'https:', 'about:', 'chrome:', 'chrome-extension:', 'file:', 'view-source:', 'ftp:', 'magnet:']
+module.exports.navigatableTypes = ['http:', 'https:', 'about:', 'chrome:', 'chrome-extension:', 'chrome-devtools:', 'file:', 'view-source:', 'ftp:', 'magnet:']
 
 /**
  * Determine the URL to use when creating a new tab
@@ -233,7 +246,8 @@ module.exports.newFrameUrl = function () {
 
   switch (settingValue) {
     case newTabMode.HOMEPAGE:
-      return getSetting(settings.HOMEPAGE) || 'about:blank'
+      const homePage = (getSetting(settings.HOMEPAGE) || 'about:blank').split('|')
+      return homePage[0]
 
     case newTabMode.DEFAULT_SEARCH_ENGINE:
       const searchProviders = require('../data/searchProviders').providers

@@ -19,21 +19,25 @@ const urlutils = require('../lib/urlutil')
 const siteTags = require('../constants/siteTags')
 const config = require('../constants/config')
 const backgrounds = require('../data/backgrounds')
+const {random} = require('../../app/common/lib/randomUtil')
+const NewPrivateTab = require('./newprivatetab')
+const windowActions = require('../actions/windowActions')
 
-const ipc = window.chrome.ipc
+const ipc = window.chrome.ipcRenderer
 
 require('../../less/about/newtab.less')
 require('../../node_modules/font-awesome/css/font-awesome.css')
 
 class NewTabPage extends React.Component {
-  constructor () {
-    super()
+  constructor (props) {
+    super(props)
     this.state = {
       showSiteRemovalNotification: false,
-      backgroundImage: this.randomBackgroundImage,
       imageLoadFailed: false,
       updatedStamp: undefined,
-      showEmptyPage: true
+      showEmptyPage: true,
+      showImages: false,
+      backgroundImage: undefined
     }
     ipc.on(messages.NEWTAB_DATA_UPDATED, (e, newTabData) => {
       const data = Immutable.fromJS(newTabData || {})
@@ -46,15 +50,24 @@ class NewTabPage extends React.Component {
         return
       }
 
+      const showEmptyPage = !!data.get('showEmptyPage')
+      const showImages = !!data.get('showImages') && !showEmptyPage
       this.setState({
         newTabData: data,
-        updatedStamp: updatedStamp,
-        showEmptyPage: !!data.get('showEmptyPage')
+        updatedStamp,
+        showEmptyPage,
+        showImages: !!data.get('showImages') && !showEmptyPage,
+        backgroundImage: showImages
+          ? this.state.backgroundImage || this.randomBackgroundImage
+          : undefined
       })
     })
   }
+  get showImages () {
+    return this.state.showImages && !!this.state.backgroundImage
+  }
   get randomBackgroundImage () {
-    const image = Object.assign({}, backgrounds[Math.floor(Math.random() * backgrounds.length)])
+    const image = Object.assign({}, backgrounds[Math.floor(random() * backgrounds.length)])
     image.style = {backgroundImage: 'url(' + image.source + ')'}
     return image
   }
@@ -84,7 +97,7 @@ class NewTabPage extends React.Component {
     }).size > 0
   }
   isBookmarked (siteProps) {
-    return siteUtil.isSiteBookmarked(this.topSites, siteProps)
+    return siteUtil.isBookmark(siteProps)
   }
   get gridLayout () {
     const sizeToCount = {large: 18, medium: 12, small: 6}
@@ -159,7 +172,13 @@ class NewTabPage extends React.Component {
   onToggleBookmark (siteProps) {
     const siteDetail = siteUtil.getDetailFromFrame(siteProps, siteTags.BOOKMARK)
     const editing = this.isBookmarked(siteProps)
-    aboutActions.setBookmarkDetail(siteDetail, siteDetail, null, editing)
+    const key = siteUtil.getSiteKey(siteDetail)
+
+    if (editing) {
+      windowActions.editBookmark(false, key)
+    } else {
+      windowActions.onBookmarkAdded(false, key)
+    }
   }
 
   onPinnedTopSite (siteProps) {
@@ -212,36 +231,44 @@ class NewTabPage extends React.Component {
     this.setState({
       imageLoadFailed: true,
       backgroundImage: this.state.imageLoadFailed
-        ? {}
+        ? undefined
         : this.fallbackImage
     })
   }
 
   render () {
     // don't render if user prefers an empty page
-    if (this.state.showEmptyPage) {
+    if (this.state.showEmptyPage && !this.props.isIncognito) {
       return <div className='empty' />
     }
+
+    if (this.props.isIncognito) {
+      return <NewPrivateTab newTabData={this.state.newTabData} />
+    }
+
     // don't render until object is found
     if (!this.state.newTabData) {
       return null
     }
-
     const getLetterFromUrl = (url) => {
       const hostname = urlutils.getHostname(url.get('location'), true)
       const name = url.get('title') || hostname || '?'
       return name.charAt(0).toUpperCase()
     }
-
     const gridLayout = this.gridLayout
-
-    return <div className='dynamicBackground' style={this.state.backgroundImage.style}>
+    const backgroundProps = {}
+    let gradientClassName = 'gradient'
+    if (this.showImages) {
+      backgroundProps.style = this.state.backgroundImage.style
+      gradientClassName = 'bgGradient'
+    }
+    return <div data-test-id='dynamicBackground' className='dynamicBackground' {...backgroundProps}>
       {
-        this.state.backgroundImage
-          ? <img src={this.state.backgroundImage.source} onError={this.onImageLoadFailed.bind(this)} />
+        this.showImages
+          ? <img src={this.state.backgroundImage.source} onError={this.onImageLoadFailed.bind(this)} data-test-id='backgroundImage' />
           : null
       }
-      <div className='gradient' />
+      <div data-test-id={this.showImages ? 'bgGradient' : 'gradient'} className={gradientClassName} />
       <div className='content'>
         <main>
           <div className='statsBar'>
@@ -290,4 +317,9 @@ class NewTabPage extends React.Component {
   }
 }
 
-module.exports = React.createElement(DragDropContext(HTML5Backend)(NewTabPage))
+module.exports = {
+  component: NewTabPage,
+  AboutNewTab: React.createElement(DragDropContext(HTML5Backend)(NewTabPage), {
+    isIncognito: window.chrome && window.chrome.extension && window.chrome.extension.inIncognitoContext
+  })
+}
