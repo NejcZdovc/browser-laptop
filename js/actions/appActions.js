@@ -1814,6 +1814,13 @@ const appActions = {
     dispatch({
       actionType: appConstants.APP_ON_BTC_TO_BAT_BEGIN_TRANSITION
     })
+  },
+
+  onLedgerVideoData: function (url) {
+    dispatch({
+      actionType: appConstants.APP_ON_LEDGER_VIDEO_DATA,
+      url
+    })
   }
 }
 

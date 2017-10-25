@@ -200,14 +200,21 @@ function registerForBeforeRequest (session, partition) {
       }
     }
     // Redirect to non-script version of DDG when it's blocked
-    let url = details.url
+    const url = details.url
     if (details.resourceType === 'mainFrame' &&
       url.startsWith('https://duckduckgo.com/?q') &&
     module.exports.isResourceEnabled('noScript', url, isPrivate)) {
-      url = url.replace('?q=', 'html?q=')
-      cb({redirectURL: url})
+      cb({redirectURL: url.replace('?q=', 'html?q=')})
     } else {
       cb({})
+    }
+
+    // Youtube ledger
+    if (module.exports.isResourceEnabled('ledger') &&
+      details.resourceType === 'image' &&
+      url.startsWith('https://www.youtube.com/api/stats/watchtime?')
+    ) {
+      appActions.onLedgerVideoData(url)
     }
   })
 }
@@ -754,6 +761,10 @@ module.exports.isResourceEnabled = (resourceName, url, isPrivate) => {
   }
   if (resourceName === 'webtorrent') {
     return getSetting(settings.TORRENT_VIEWER_ENABLED, settingsState)
+  }
+
+  if (resourceName === 'ledger') {
+    return getSetting(settings.PAYMENTS_ENABLED, settingsState)
   }
 
   if (resourceName === 'webtorrent') {

@@ -44,6 +44,7 @@ const request = require('../../../js/lib/request')
 const ledgerUtil = require('../../common/lib/ledgerUtil')
 const tabState = require('../../common/state/tabState')
 const pageDataUtil = require('../../common/lib/pageDataUtil')
+const ledgerVideoUtil = require('../../common/lib/ledgerVideoUtil')
 const {getWebContents} = require('../../browser/webContentsCache')
 
 // Caching
@@ -2422,6 +2423,31 @@ const transitionWalletToBat = () => {
   }
 }
 
+const addVideoView = (state, url) => {
+  if (!synopsis) {
+    return state
+  }
+
+  const videoData = ledgerVideoUtil.parseVideoRequest(url)
+  const publisherKey = videoData.publisherKey
+
+  if (publisherKey == null) {
+    return state
+  }
+
+  synopsis.addPublisher(publisherKey, {duration: videoData.duration, revisitP: false})
+  state = ledgerState.mergePublisher(state, publisherKey, synopsis.publishers[publisherKey])
+  state = updatePublisherInfo(state)
+  state = verifiedP(state, publisherKey, (error, result) => {
+    if (!error) {
+      appActions.onPublisherOptionUpdate(publisherKey, 'verified', result)
+      savePublisherOption(publisherKey, 'verified', result)
+    }
+  })
+
+  return state
+}
+
 module.exports = {
   backupKeys,
   recoverKeys,
@@ -2453,5 +2479,6 @@ module.exports = {
   notifications,
   deleteSynopsis,
   transitionWalletToBat,
-  getNewClient
+  getNewClient,
+  addVideoView
 }

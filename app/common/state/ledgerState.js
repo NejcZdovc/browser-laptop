@@ -134,6 +134,17 @@ const ledgerState = {
     return state.setIn(['ledger', 'synopsis', 'publishers', key], value)
   },
 
+  mergePublisher: (state, key, value) => {
+    state = validateState(state)
+    if (key == null || value == null) {
+      return state
+    }
+
+    value = makeImmutable(value)
+    const oldData = ledgerState.getPublisher(state, key)
+    return state.mergeIn(['ledger', 'synopsis', 'publishers', key], oldData.merge(value))
+  },
+
   deletePublishers: (state, key) => {
     state = validateState(state)
 
