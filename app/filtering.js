@@ -211,6 +211,7 @@ function registerForBeforeRequest (session, partition) {
 
     // Ledger Videos
     if (
+      getSetting(settings.PAYMENTS_ALLOW_VIDEO_PUBLISHERS) &&
       module.exports.isResourceEnabled('ledger') &&
       url.startsWith('https://www.youtube.com/api/stats/watchtime?')
     ) {

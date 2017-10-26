@@ -52,6 +52,7 @@ const settings = {
   AUTOFILL_ENABLED: 'privacy.autofill-enabled',
   // Payments Tab
   PAYMENTS_ALLOW_NON_VERIFIED: 'payments.allow-non-verified-publishers',
+  PAYMENTS_ALLOW_VIDEO_PUBLISHERS: 'payments.allow-video-publishers',
   PAYMENTS_CONTRIBUTION_AMOUNT: 'payments.contribution-amount',
   PAYMENTS_ENABLED: 'payments.enabled',
   PAYMENTS_MINIMUM_VISIT_TIME: 'payments.minimum-visit-time',

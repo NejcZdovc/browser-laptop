@@ -66,8 +66,6 @@ const getYoutubeDuration = (query) => {
     return time
   }
 
-  console.log('getYoutubeDuration', query.st, query.et)
-
   const startTime = query.st.split(',')
   const endTime = query.et.split(',')
 
@@ -78,8 +76,6 @@ const getYoutubeDuration = (query) => {
   for (let i = 0; i < startTime.length; i++) {
     time += parseInt(endTime[i]) - parseInt(startTime[i])
   }
-
-  console.log('getYoutubeDuration time', time)
 
   // we get seconds back, so we need to convert it into ms
   time = time * 1000

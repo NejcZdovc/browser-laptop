@@ -357,6 +357,7 @@ AppStore
     'notification-add-funds-timestamp': number, // timestamp on which we decide if we will show notification Add founds
     'notification-reconcile-soon-timestamp': number, // timestamp
     'payments.allow-non-verified-publishers': boolean,
+    'payments.allow-video-publishers': boolean,
     'payments.contribution-amount': number, // in USD
     'payments.enabled': boolean, // true if the Payments pane is active
     'payments.minimum-visit-time': number,

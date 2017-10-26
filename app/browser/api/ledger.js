@@ -2440,7 +2440,6 @@ const videoViewRequest = (state, url) => {
   }
 
   state = addVideoView(state, cacheData.get('publisherKey'), videoData.duration)
-  console.log(ledgerState.getPublishers(state).toJS())
   return state
 }
 
@@ -2448,15 +2447,16 @@ const onVideoQuery = (state, data) => {
   const publisherKey = data.get('publisherKey')
   const publisherData = data.delete('duration').delete('videoId')
 
-  state = addVideoView(state, publisherKey, data.get('duration'))
+  state = addVideoView(state, publisherKey, data.get('duration'), false)
   state = ledgerState.mergePublisher(state, publisherKey, publisherData)
   state = ledgerVideoCache.setData(state, data.get('videoId'), publisherData)
+  state = updatePublisherInfo(state)
 
   return state
 }
 
 let currentVideoPublisher = null
-const addVideoView = (state, publisherKey, duration) => {
+const addVideoView = (state, publisherKey, duration, update = true) => {
   if (publisherKey == null) {
     return state
   }
@@ -2467,19 +2467,17 @@ const addVideoView = (state, publisherKey, duration) => {
     currentVideoPublisher = publisherKey
   }
 
-  console.log('addVideoView duration', duration)
-
   const minDuration = getSetting(settings.PAYMENTS_MINIMUM_VISIT_TIME)
   duration = parseInt(duration)
   if (duration > 0 && duration < minDuration) {
     duration = minDuration
   }
 
-  console.log('addVideoView final', duration)
-
   synopsis.addPublisher(publisherKey, {duration: duration, revisitP: revisited})
   state = ledgerState.mergePublisher(state, publisherKey, synopsis.publishers[publisherKey])
-  state = updatePublisherInfo(state)
+  if (update) {
+    state = updatePublisherInfo(state)
+  }
   state = verifiedP(state, publisherKey, (error, result) => {
     if (!error) {
       appActions.onPublisherOptionUpdate(publisherKey, 'verified', result)

@@ -122,8 +122,8 @@ class LedgerTable extends ImmutableComponent {
       return 'https://www.youtube.com'
     }
 
-    const urlArray = url.split('-')
-    return `https://www.youtube.com/channel${urlArray[1]}`
+    url = url.replace('yt-', '')
+    return `https://www.youtube.com/channel/${url}`
   }
 
   getSiteName (synopsis) {
