@@ -1821,6 +1821,13 @@ const appActions = {
       actionType: appConstants.APP_ON_LEDGER_VIDEO_DATA,
       url
     })
+  },
+
+  onLedgerVideoQuery: function (data) {
+    dispatch({
+      actionType: appConstants.APP_ON_LEDGER_VIDEO_QUERY,
+      data
+    })
   }
 }
 

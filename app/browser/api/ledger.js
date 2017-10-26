@@ -45,6 +45,7 @@ const ledgerUtil = require('../../common/lib/ledgerUtil')
 const tabState = require('../../common/state/tabState')
 const pageDataUtil = require('../../common/lib/pageDataUtil')
 const ledgerVideoUtil = require('../../common/lib/ledgerVideoUtil')
+const ledgerVideoCache = require('../../common/cache/ledgerVideoCache')
 const {getWebContents} = require('../../browser/webContentsCache')
 
 // Caching
@@ -559,7 +560,10 @@ const getPublisherData = (result, scorekeeper) => {
     faviconURL: result.faviconURL,
     score: result.scores[scorekeeper],
     pinPercentage: result.pinPercentage,
-    weight: result.pinPercentage
+    weight: result.pinPercentage,
+    name: result.name || '',
+    provider: result.provider || null,
+    type: result.type || null
   }
   // HACK: Protocol is sometimes blank here, so default to http:// so we can
   // still generate publisherURL.
@@ -571,7 +575,7 @@ const getPublisherData = (result, scorekeeper) => {
     data.hoursSpent = Math.max(Math.floor(duration / miliseconds.hour), 1)
     data.minutesSpent = Math.round((duration % miliseconds.hour) / miliseconds.minute)
   } else if (duration >= miliseconds.minute) {
-    data.minutesSpent = Math.max(Math.round(duration / miliseconds.minute), 1)
+    data.minutesSpent = Math.max(Math.floor(duration / miliseconds.minute), 1)
     data.secondsSpent = Math.round((duration % miliseconds.minute) / miliseconds.second)
   } else {
     data.secondsSpent = Math.max(Math.round(duration / miliseconds.second), 1)
@@ -2423,19 +2427,57 @@ const transitionWalletToBat = () => {
   }
 }
 
-const addVideoView = (state, url) => {
+const videoViewRequest = (state, url) => {
   if (!synopsis) {
     return state
   }
 
   const videoData = ledgerVideoUtil.parseVideoRequest(url)
-  const publisherKey = videoData.publisherKey
+  const cacheData = ledgerVideoCache.getDataByVideo(state, videoData.videoId)
+  if (cacheData.isEmpty()) {
+    ledgerVideoUtil.fetchVideoData(videoData)
+    return state
+  }
 
+  state = addVideoView(state, cacheData.get('publisherKey'), videoData.duration)
+  console.log(ledgerState.getPublishers(state).toJS())
+  return state
+}
+
+const onVideoQuery = (state, data) => {
+  const publisherKey = data.get('publisherKey')
+  const publisherData = data.delete('duration').delete('videoId')
+
+  state = addVideoView(state, publisherKey, data.get('duration'))
+  state = ledgerState.mergePublisher(state, publisherKey, publisherData)
+  state = ledgerVideoCache.setData(state, data.get('videoId'), publisherData)
+
+  return state
+}
+
+let currentVideoPublisher = null
+const addVideoView = (state, publisherKey, duration) => {
   if (publisherKey == null) {
     return state
   }
 
-  synopsis.addPublisher(publisherKey, {duration: videoData.duration, revisitP: false})
+  let revisited = true
+  if (currentVideoPublisher !== publisherKey) {
+    revisited = false
+    currentVideoPublisher = publisherKey
+  }
+
+  console.log('addVideoView duration', duration)
+
+  const minDuration = getSetting(settings.PAYMENTS_MINIMUM_VISIT_TIME)
+  duration = parseInt(duration)
+  if (duration > 0 && duration < minDuration) {
+    duration = minDuration
+  }
+
+  console.log('addVideoView final', duration)
+
+  synopsis.addPublisher(publisherKey, {duration: duration, revisitP: revisited})
   state = ledgerState.mergePublisher(state, publisherKey, synopsis.publishers[publisherKey])
   state = updatePublisherInfo(state)
   state = verifiedP(state, publisherKey, (error, result) => {
@@ -2480,5 +2522,6 @@ module.exports = {
   deleteSynopsis,
   transitionWalletToBat,
   getNewClient,
-  addVideoView
+  videoViewRequest,
+  onVideoQuery
 }

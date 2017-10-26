@@ -5,27 +5,32 @@
 const React = require('react')
 const {StyleSheet, css} = require('aphrodite')
 
-// components
+// Actions
+const aboutActions = require('../../../../../js/about/aboutActions')
+
+// Components
 const ImmutableComponent = require('../../immutableComponent')
 const SortableTable = require('../../common/sortableTable')
 const SwitchControl = require('../../common/switchControl')
 const BrowserButton = require('../../common/browserButton')
 const PinnedInput = require('./pinnedInput')
+const {SettingCheckbox, SiteSettingCheckbox} = require('../../common/settings')
 
-// style
+// Constants
+const settings = require('../../../../../js/constants/settings')
+const ledgerVideoProviders = require('../../../../common/constants/ledgerVideoProviders')
+
+// Other
+const getSetting = require('../../../../../js/settings').getSetting
+const urlUtil = require('../../../../../js/lib/urlutil')
+
+// Style
 const globalStyles = require('../../styles/global')
 const {paymentStylesVariables} = require('../../styles/payment')
 const verifiedGreenIcon = require('../../../../extensions/brave/img/ledger/verified_green_icon.svg')
 const verifiedWhiteIcon = require('../../../../extensions/brave/img/ledger/verified_white_icon.svg')
 const removeIcon = require('../../../../extensions/brave/img/ledger/icon_remove.svg')
 const pinIcon = require('../../../../extensions/brave/img/ledger/icon_pin.svg')
-
-// other
-const settings = require('../../../../../js/constants/settings')
-const getSetting = require('../../../../../js/settings').getSetting
-const aboutActions = require('../../../../../js/about/aboutActions')
-const urlUtil = require('../../../../../js/lib/urlutil')
-const {SettingCheckbox, SiteSettingCheckbox} = require('../../common/settings')
 
 class LedgerTable extends ImmutableComponent {
   get synopsis () {
@@ -112,6 +117,40 @@ class LedgerTable extends ImmutableComponent {
     }
   }
 
+  getYoutubeUrl (url) {
+    if (url == null) {
+      return 'https://www.youtube.com'
+    }
+
+    const urlArray = url.split('-')
+    return `https://www.youtube.com/channel${urlArray[1]}`
+  }
+
+  getSiteName (synopsis) {
+    let publisherURL = synopsis.get('publisherURL')
+    let faviconURL = synopsis.get('faviconURL')
+    let site = synopsis.get('site')
+    let name = site
+
+    if (synopsis.get('type') === 'video') {
+      if (synopsis.get('provider') === ledgerVideoProviders.YOUTUBE) {
+        publisherURL = this.getYoutubeUrl(site)
+        name = `Youtube - ${synopsis.get('name')}`
+      }
+    }
+
+    return <div>
+      <a className={css(styles.siteData)} href={publisherURL} rel='noopener' target='_blank' tabIndex={-1}>
+        {
+          faviconURL
+            ? <img className={css(styles.favicon)} src={faviconURL} alt={site} />
+            : <span className={css(styles.defaultIcon)}><span className={globalStyles.appIcons.defaultIcon} /></span>
+        }
+        <span className={css(styles.url)} data-test-id='siteName'>{name}</span>
+      </a>
+    </div>
+  }
+
   get columnClassNames () {
     return [
       css(styles.alignRight, styles.verifiedTd), // verified
@@ -144,12 +183,10 @@ class LedgerTable extends ImmutableComponent {
   }
 
   getRow (synopsis) {
-    const faviconURL = synopsis.get('faviconURL')
     const views = synopsis.get('views')
     const verified = synopsis.get('verified')
     const pinned = this.isPinned(synopsis)
     const duration = synopsis.get('duration')
-    const publisherURL = synopsis.get('publisherURL')
     const percentage = pinned ? this.pinPercentageValue(synopsis) : synopsis.get('percentage')
     const site = synopsis.get('site')
     const defaultAutoInclude = this.enabledForSite(synopsis)
@@ -165,16 +202,7 @@ class LedgerTable extends ImmutableComponent {
         value: ''
       },
       {
-        html: <div>
-          <a className={css(styles.siteData)} href={publisherURL} rel='noopener' target='_blank' tabIndex={-1}>
-            {
-              faviconURL
-                ? <img className={css(styles.favicon)} src={faviconURL} alt={site} />
-                : <span className={css(styles.defaultIcon)}><span className={globalStyles.appIcons.defaultIcon} /></span>
-            }
-            <span className={css(styles.url)} data-test-id='siteName'>{site}</span>
-          </a>
-        </div>,
+        html: this.getSiteName(synopsis),
         value: site
       },
       {

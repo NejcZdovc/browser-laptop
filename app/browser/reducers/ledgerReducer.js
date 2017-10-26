@@ -406,7 +406,12 @@ const ledgerReducer = (state, action, immutableAction) => {
       }
     case appConstants.APP_ON_LEDGER_VIDEO_DATA:
       {
-        state = ledgerApi.addVideoView(state, action.get('url'))
+        state = ledgerApi.videoViewRequest(state, action.get('url'))
+        break
+      }
+    case appConstants.APP_ON_LEDGER_VIDEO_QUERY:
+      {
+        state = ledgerApi.onVideoQuery(state, action.get('data'))
         break
       }
   }

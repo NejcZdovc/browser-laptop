@@ -209,9 +209,9 @@ function registerForBeforeRequest (session, partition) {
       cb({})
     }
 
-    // Youtube ledger
-    if (module.exports.isResourceEnabled('ledger') &&
-      details.resourceType === 'image' &&
+    // Ledger Videos
+    if (
+      module.exports.isResourceEnabled('ledger') &&
       url.startsWith('https://www.youtube.com/api/stats/watchtime?')
     ) {
       appActions.onLedgerVideoData(url)

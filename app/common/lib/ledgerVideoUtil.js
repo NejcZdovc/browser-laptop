@@ -4,7 +4,11 @@
 
 const urlParse = require('../urlParse')
 const queryString = require('querystring')
+const request = require('request')
+const appActions = require('../../../js/actions/appActions')
+const ledgerVideoProviders = require('../constants/ledgerVideoProviders')
 
+// General
 const parseVideoRequest = (url) => {
   const parsedUrl = urlParse(url)
   let query = null
@@ -19,24 +23,41 @@ const parseVideoRequest = (url) => {
 
   // Youtube handler
   if (url.includes('youtube.com/api')) {
-    const data = getYoutubeData(query)
-
     return {
-      publisherKey: getYoutubePublisher(data.channelId),
+      videoId: getYoutubeVideoKey(query),
       duration: getYoutubeDuration(query),
-      name: data.name,
-      type: 'YouTube' // Move into constant
+      type: 'video',
+      provider: ledgerVideoProviders.YOUTUBE
     }
   }
 }
 
-const getYoutubePublisher = (query) => {
+const fetchVideoData = (data) => {
+  switch (data.provider) {
+    case ledgerVideoProviders.YOUTUBE:
+      {
+        getYoutubeData(data)
+        break
+      }
+  }
+}
+
+// Youtube specific
+const getYoutubeVideoKey = (query) => {
   if (query == null) {
     return null
   }
 
-  // TODO we need to convert video id into channel id
-  return `yt-${query.docid}`
+  return query.docid
+}
+
+const getYoutubePublisher = (url) => {
+  if (url == null) {
+    return null
+  }
+
+  const urlArray = url.split('/')
+  return `yt-${urlArray[4]}`
 }
 
 const getYoutubeDuration = (query) => {
@@ -44,6 +65,8 @@ const getYoutubeDuration = (query) => {
   if (query == null || query.st == null || query.et == null) {
     return time
   }
+
+  console.log('getYoutubeDuration', query.st, query.et)
 
   const startTime = query.st.split(',')
   const endTime = query.et.split(',')
@@ -53,8 +76,10 @@ const getYoutubeDuration = (query) => {
   }
 
   for (let i = 0; i < startTime.length; i++) {
-    time += parseFloat(endTime[i]) - parseFloat(startTime[i])
+    time += parseInt(endTime[i]) - parseInt(startTime[i])
   }
+
+  console.log('getYoutubeDuration time', time)
 
   // we get seconds back, so we need to convert it into ms
   time = time * 1000
@@ -62,24 +87,40 @@ const getYoutubeDuration = (query) => {
   return time
 }
 
-const getYoutubeData = (query) => {
-  // TODO
-  // 0. get data from cache if exists
-  // 1. query to get  https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ
-  // 2. parse author_url to get channel id
-  // 3. query author_name to get channel name
-  // 4. cache this data into cache object in the state, which should be delete after you close brave
-  if (query == null) {
+const getYoutubeData = (data) => {
+  const videoId = data.videoId
+  if (videoId == null) {
     return null
   }
 
-  const id = query.docid
-  return {
-    channelId: id,
-    name: 'Test'
+  const headers = {
+    headers: {
+      'User-Agent': 'node.js'
+    }
   }
+
+  request(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}`, headers, (error, response, body) => {
+    if (error) {
+      return
+    }
+
+    const parsed = JSON.parse(body)
+    const publisherKey = getYoutubePublisher(parsed.author_url)
+    const actionData = {
+      name: parsed.author_name,
+      duration: data.duration,
+      videoId,
+      publisherKey,
+      provider: data.provider,
+      type: data.type,
+      faviconURL: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsSAAALEgHS3X78AAABDklEQVRYw+2X4Y2CQBSEv3e5ArgOKIEO3BK0A0uhBDsRO8AOtgMpYTuY+yErRL3cobLrJUwyISGEmWTfm/fWJJETH2TGYiC7gc+7b80KoALKngBu4r/b/tn19Ejh5itJA6EStALNxFZQjTWvxcOM4pFhbGJsoEkgHtlEXbsEkVnaRJJs6AKzMnn5nwv90obTDKzXr7BQPZ4D+z20LZRlxiBarcB7qOtna0EI3KQqvob3knNTO8ENbfisgYjdTiqKSQayz4J/fgQhSHX9aBo6ST9Mw7/geITtFrpuhnH8GzYbaJrXBKKkGMWnxOX3hRTeZBidcUgof7jdiLIvJJlWMrt7M0q4lNpyNVsM5DbwDTlqsJtbbh7VAAAAAElFTkSuQmCC'
+    }
+
+    appActions.onLedgerVideoQuery(actionData)
+  })
 }
 
 module.exports = {
-  parseVideoRequest
+  parseVideoRequest,
+  fetchVideoData
 }
